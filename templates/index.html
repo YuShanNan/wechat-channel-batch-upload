@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>视频号上传</title>
+<style>
+  :root {
+    --green: #07c160; --green-hover: #06ad50; --red: #e74c3c;
+    --bg: #f0f2f5; --card: #fff; --text: #1a1a1a; --text2: #888;
+    --border: #e5e5e5; --shadow: 0 1px 3px rgba(0,0,0,.06); --radius: 8px;
+  }
+  *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+  html{font-size:15px}
+  body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
+
+  .header{background:var(--card);border-bottom:1px solid var(--border);padding:0 24px;height:56px;display:flex;align-items:center;justify-content:space-between}
+  .header h1{font-size:17px;font-weight:600}
+  .header .acct-select{padding:6px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px;outline:none;background:var(--card);min-width:160px}
+  .header .acct-select:focus{border-color:var(--green)}
+
+  .main{max-width:1060px;margin:0 auto;padding:24px;display:grid;grid-template-columns:1fr 340px;gap:24px}
+  .left,.right{display:flex;flex-direction:column;gap:16px}
+  .card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px}
+  .card-title{font-size:13px;font-weight:500;color:#555;margin-bottom:8px}
+
+  /* 拖拽区 */
+  .dropzone{
+    border:2px dashed var(--border);border-radius:var(--radius);
+    padding:28px 16px;text-align:center;cursor:pointer;transition:all .2s;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
+  }
+  .dropzone.dragover{border-color:var(--green);background:#f0faf4}
+  .dropzone.has-file{border-style:solid;border-color:var(--green)}
+  .dropzone .dz-icon{font-size:32px;color:var(--text2)}
+  .dropzone .dz-title{font-size:14px;font-weight:500}
+  .dropzone .dz-hint{font-size:11px;color:var(--text2)}
+  .dropzone .dz-file{font-size:12px;color:var(--green);word-break:break-all}
+  .dropzone .dz-progress{height:4px;background:#e9ecef;border-radius:2px;margin-top:8px;width:100%;overflow:hidden}
+  .dropzone .dz-progress-fill{height:100%;background:var(--green);border-radius:2px;transition:width .2s}
+
+  /* 封面 */
+  .cover-drop{
+    border:2px dashed var(--border);border-radius:var(--radius);
+    padding:20px 16px;text-align:center;cursor:pointer;transition:all .2s;
+    min-height:100px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
+  }
+  .cover-drop.dragover{border-color:var(--green);background:#f0faf4}
+  .cover-drop.has-file{border-style:solid;border-color:var(--green)}
+  .cover-drop .cv-label{font-size:12px;color:var(--text2)}
+  .cover-drop .cv-ratio{font-size:11px;color:#bbb}
+  .cover-drop .cv-file{font-size:11px;color:var(--green);word-break:break-all}
+  .cover-drop img.cover-thumb{max-width:100%;height:auto;border-radius:6px}
+
+  /* 预览 */
+  .preview-wrap{display:none;position:relative;width:100%;height:300px;border-radius:6px;overflow:hidden;background:#000;cursor:pointer}
+  .preview-wrap.show{display:block}
+  .video-preview{display:block;width:100%;height:calc(100% - 32px);object-fit:contain}
+  .preview-ctrls{display:flex;align-items:center;gap:8px;padding:4px 10px;height:32px;background:rgba(0,0,0,.7)}
+  .preview-btn{background:none;border:none;color:#fff;cursor:pointer;font-size:14px;padding:2px 6px;line-height:1;font-family:inherit}
+  .preview-btn:hover{color:var(--green)}
+  .preview-bar{flex:1;height:12px;cursor:pointer;position:relative;display:flex;align-items:center}
+  .preview-bar-track{width:100%;height:4px;background:rgba(255,255,255,.25);border-radius:2px;overflow:hidden}
+  .preview-bar-fill{height:4px;background:var(--green);border-radius:2px;transition:width .1s linear}
+
+  /* 横向队列卡片 */
+  .queue-row{display:flex;flex-wrap:wrap;gap:10px}
+  .queue-row>[id^="qw-"]{transition:transform .25s ease}
+  .queue-card{
+    border-radius:6px;overflow:hidden;cursor:pointer;position:relative;
+    border:2px solid transparent;transition:border-color .15s,height .3s ease,transform .25s ease;
+    flex-shrink:0;
+  }
+  .queue-card:hover{border-color:var(--border)}
+  .queue-card.active{border-color:var(--green)}
+  .queue-card.dragging{opacity:.4}
+  .queue-card .qc-thumb{width:100%;height:100%;object-fit:cover;display:block;background:#000}
+  .queue-card .qc-remove{
+    position:absolute;top:2px;right:2px;
+    width:18px;height:18px;border-radius:50%;
+    background:rgba(0,0,0,.55);color:#fff;
+    font-size:11px;line-height:18px;text-align:center;
+    cursor:pointer;display:none;
+  }
+  .queue-card:hover .qc-remove{display:block}
+  .queue-card .qc-remove:hover{background:var(--red)}
+  .queue-card .qc-status{
+    position:absolute;top:2px;left:2px;
+    padding:1px 6px;border-radius:8px;font-size:10px;font-weight:600;
+  }
+  .queue-card .qc-status.done{background:#d4edda;color:#155724}
+  .queue-card .qc-status.fail{background:#f8d7da;color:#721c24}
+  .qc-name{
+    font-size:11px;color:var(--text2);text-align:center;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    max-width:140px;margin-top:4px;
+  }
+
+  /* 表单 */
+  .form-group{display:flex;flex-direction:column;gap:4px}
+  .form-group label{font-size:13px;font-weight:500;color:#555}
+  .form-group input,.form-group textarea{
+    padding:10px 12px;border:1px solid var(--border);border-radius:6px;
+    font-size:14px;font-family:inherit;outline:none;width:100%;transition:border-color .2s;
+  }
+  .form-group textarea{min-height:80px;resize:vertical}
+  .form-group input:focus,.form-group textarea:focus{border-color:var(--green)}
+
+  .radio-row{display:flex;gap:16px;padding:8px 0;align-items:center}
+  .radio-row label{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px}
+  .radio-row input[type=radio]{accent-color:var(--green)}
+
+  .btn{padding:10px 24px;border:none;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer;transition:all .15s;font-family:inherit}
+  .btn:disabled{opacity:.5;cursor:not-allowed}
+  .btn-publish{background:var(--green);color:#fff;width:100%}
+  .btn-publish:hover:not(:disabled){background:var(--green-hover)}
+
+  /* overlay */
+  .overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:100;align-items:center;justify-content:center}
+  .overlay.show{display:flex}
+  .overlay .modal{background:var(--card);border-radius:12px;padding:32px;text-align:center;max-width:400px;width:90%}
+  .overlay .spinner{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 16px}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .overlay .status-text{font-size:15px;color:#333}
+  .overlay .progress-bar{height:6px;background:#e9ecef;border-radius:3px;overflow:hidden;margin:8px 0}
+  .overlay .progress-fill{height:100%;background:var(--green);border-radius:3px;transition:width .3s}
+  .overlay .progress-text{font-size:12px;color:var(--text2)}
+  .overlay .log-text{font-size:12px;color:var(--text2);margin-top:8px;white-space:pre-wrap}
+
+  .toast{position:fixed;top:20px;right:20px;background:#333;color:#fff;padding:10px 20px;border-radius:6px;font-size:13px;z-index:999;animation:slideIn .3s ease}
+  @keyframes slideIn{from{transform:translateX(100px);opacity:0}}
+
+  @media(max-width:800px){.main{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>视频号上传</h1>
+  <select class="acct-select" id="account-select"><option value="">选择账号…</option></select>
+</div>
+
+<div class="main">
+  <div class="left">
+    <!-- 视频拖入 -->
+    <div class="card">
+      <div class="dropzone" id="video-dz">
+        <div class="dz-icon">+</div>
+        <div class="dz-title">拖拽或点击选择视频</div>
+        <div class="dz-hint">MP4/H.264，不超过 20GB，支持多选</div>
+      </div>
+      <input type="file" id="video-input" accept="video/mp4,video/*" multiple style="display:none">
+    </div>
+
+    <!-- 视频预览 -->
+    <div class="card" id="preview-card" style="display:none">
+      <div class="preview-wrap" id="preview-wrap">
+        <video class="video-preview" id="video-preview-a" onclick="togglePreviewPlay()" style="display:none"></video>
+        <video class="video-preview" id="video-preview-b" onclick="togglePreviewPlay()" style="display:none"></video>
+        <div class="preview-ctrls">
+          <button class="preview-btn" id="preview-play-btn" onclick="togglePreviewPlay()">▶</button>
+          <div class="preview-bar" id="preview-bar" onclick="seekPreview(event)">
+            <div class="preview-bar-track"><div class="preview-bar-fill" id="preview-bar-fill" style="width:0%"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 队列 -->
+    <div class="card">
+      <div class="card-title">上传队列 (<span id="queue-count">0</span>)</div>
+      <div class="queue-row" id="queue-row"></div>
+    </div>
+  </div>
+
+  <div class="right">
+    <!-- 封面 -->
+    <div class="card">
+      <div class="card-title">封面</div>
+      <div class="cover-drop" id="cover-dz">
+        <div class="cv-label">个人主页封面</div>
+        <div class="cv-ratio">3:4</div>
+      </div>
+      <input type="file" id="cover-input" accept="image/png,image/jpeg,image/webp" style="display:none">
+    </div>
+
+    <!-- 表单 -->
+    <div class="card" style="flex:1">
+      <div style="display:flex;flex-direction:column;gap:14px">
+        <div class="form-group">
+          <label>描述</label>
+          <textarea id="form-desc" placeholder="添加描述 #话题 &commat;视频号"></textarea>
+        </div>
+        <div class="form-group">
+          <label>短标题</label>
+          <input id="form-title" placeholder="概括视频主要内容，6-16字" maxlength="20">
+        </div>
+        <div class="form-group">
+          <label>短剧名称</label>
+          <input id="form-drama" placeholder="输入短剧名称">
+        </div>
+        <div class="form-group">
+          <label>定时发表</label>
+          <div class="radio-row">
+            <label><input type="radio" name="schedule" value="now" checked onchange="toggleSchedule()">不定时</label>
+            <label><input type="radio" name="schedule" value="scheduled" onchange="toggleSchedule()">定时</label>
+          </div>
+          <input type="datetime-local" id="form-time" style="display:none">
+        </div>
+        <div style="font-size:13px;color:var(--text2)">位置: 不显示</div>
+      </div>
+    </div>
+    <button class="btn btn-publish" id="btn-publish" onclick="startUpload()">发表</button>
+  </div>
+</div>
+
+<div class="overlay" id="overlay">
+  <div class="modal">
+    <div class="spinner" id="spinner"></div>
+    <div class="status-text" id="status-text">准备上传…</div>
+    <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+    <div class="progress-text" id="progress-text"></div>
+    <div class="log-text" id="log-text"></div>
+  </div>
+</div>
+
+<script>
+let accounts=[], videoQueue=[], currentCoverPath='';
+
+// ==================== 账号 ====================
+async function loadAccounts(){
+  const res=await fetch('/api/accounts'); const data=await res.json();
+  accounts=data.accounts||[];
+  document.getElementById('account-select').innerHTML='<option value="">选择账号…</option>'+
+    accounts.map(a=>`<option value="${a.name}">${a.name} (${a.nickname||''})</option>`).join('');
+}
+loadAccounts();
+
+// ==================== 视频上传 ====================
+const videoDz=document.getElementById('video-dz');
+const videoInput=document.getElementById('video-input');
+
+videoDz.addEventListener('click',()=>videoInput.click());
+videoDz.addEventListener('dragover',e=>{e.preventDefault();videoDz.classList.add('dragover')});
+videoDz.addEventListener('dragleave',()=>videoDz.classList.remove('dragover'));
+videoDz.addEventListener('drop',async e=>{
+  e.preventDefault();videoDz.classList.remove('dragover');
+  await uploadFiles(e.dataTransfer.files,'video');
+});
+videoInput.addEventListener('change',async()=>{
+  await uploadFiles(videoInput.files,'video'); videoInput.value='';
+});
+
+async function uploadFiles(files,type){
+  const newVideos=[];
+  for(const f of files){
+    if(type==='video'&&!f.type.startsWith('video/'))continue;
+    if(type==='cover'&&!f.type.startsWith('image/'))continue;
+
+    videoDz.innerHTML=`<div class="dz-file">上传中: ${f.name}</div><div class="dz-progress"><div class="dz-progress-fill" id="dz-pct" style="width:0%"></div></div>`;
+    videoDz.classList.add('has-file');
+
+    const form=new FormData();form.append('file',f);
+    let res;
+    try{
+      res=await new Promise((resolve,reject)=>{
+        const xhr=new XMLHttpRequest();
+        xhr.upload.onprogress=e=>{
+          if(e.lengthComputable){
+            const pct=Math.round(e.loaded/e.total*100);
+            const el=document.getElementById('dz-pct');
+            if(el)el.style.width=pct+'%';
+          }
+        };
+        xhr.onload=()=>{try{resolve(JSON.parse(xhr.responseText))}catch(e){reject(e)}};
+        xhr.onerror=()=>reject(new Error('上传失败'));
+        xhr.open('POST','/api/upload-temp');xhr.send(form);
+      });
+    }catch(e){toast('上传失败: '+e.message);continue}
+
+    if(res.error){toast(res.error);continue}
+    if(res.path){
+      if(type==='video'){
+        newVideos.push({path:res.path,name:res.name,status:'',cardHeight:null});
+      }else{
+        setCoverData(res.path,res.name);
+      }
+    }
+  }
+  // 全部上传完后一次性加入队列，重置拖拽区
+  if(newVideos.length>0){
+    videoQueue.push(...newVideos);
+  }
+  videoDz.classList.remove('has-file');
+  videoDz.innerHTML='<div class="dz-icon">+</div><div class="dz-title">拖拽或点击选择视频</div><div class="dz-hint">MP4/H.264，不超过 20GB，支持多选</div>';
+  renderQueue();
+}
+
+// ==================== 封面 ====================
+const coverDz=document.getElementById('cover-dz');
+const coverInput=document.getElementById('cover-input');
+
+coverDz.addEventListener('click',()=>coverInput.click());
+coverDz.addEventListener('dragover',e=>{e.preventDefault();coverDz.classList.add('dragover')});
+coverDz.addEventListener('dragleave',()=>coverDz.classList.remove('dragover'));
+coverDz.addEventListener('drop',async e=>{
+  e.preventDefault();coverDz.classList.remove('dragover');
+  await uploadFiles(e.dataTransfer.files,'cover');
+});
+coverInput.addEventListener('change',async()=>{
+  await uploadFiles(coverInput.files,'cover'); coverInput.value='';
+});
+
+function setCoverData(path,name){
+  currentCoverPath=path;
+  coverDz.innerHTML=`<div class="cv-file">${name}</div><img class="cover-thumb" src="/api/preview/${encodeURIComponent(path)}">`;
+  coverDz.classList.add('has-file');
+}
+
+// ==================== 队列渲染 ====================
+function renderQueue(){
+  const row=document.getElementById('queue-row');
+  const countEl=document.getElementById('queue-count');
+  const previewCard=document.getElementById('preview-card');
+  countEl.textContent=videoQueue.length;
+
+  if(videoQueue.length===0){
+    row.innerHTML='';
+    previewCard.style.display='none';
+    return;
+  }
+  previewCard.style.display='';
+
+  const W=140;
+  const defH=Math.round(W/16*9);
+  row.innerHTML=videoQueue.map((v,i)=>{
+    const cls=v.status==='done'?'done':v.status==='fail'?'fail':'';
+    const src=v.path?`/api/preview/${encodeURIComponent(v.path)}`:'';
+    const h=v.cardHeight||defH;
+    return `<div id="qw-${i}" style="display:flex;flex-direction:column;align-items:center;gap:2px" onclick="updatePreview(${i})" draggable="true" onDragStart="onDragStart(event,${i})" onDragOver="onDragOver(event)" onDrop="onDrop(event,${i})" onDragEnd="onDragEnd(event)">
+      <div class="queue-card${i===0?' active':''}" id="qc-${i}" style="width:${W}px;height:${h}px">
+        ${src?`<video class="qc-thumb" id="qcv-${i}" src="${src}" preload="metadata" muted></video>`:`<div class="qc-thumb" id="qcv-${i}" style="display:flex;align-items:center;justify-content:center;color:#666;font-size:11px">...</div>`}
+        ${cls?`<div class="qc-status ${cls}">${cls==='done'?'✓':'✗'}</div>`:''}
+        <div class="qc-remove" onclick="event.stopPropagation();removeFromQueue(${i})">✕</div>
+      </div>
+      <div class="qc-name" title="${v.name}">${v.name}</div>
+    </div>`;
+  }).join('');
+
+  // 默认用存储高度，未加载过 metadata 的不主动加载（延迟到点击时）
+  videoQueue.forEach((v,i)=>{
+    if(v.cardHeight){
+      const card=document.getElementById('qc-'+i);
+      if(card)card.style.height=v.cardHeight+'px';
+    }
+  });
+
+  if(videoQueue.length>0&&!document.getElementById('preview-wrap').classList.contains('show'))updatePreview(0);
+}
+
+function setCardHeight(vel,card,i){
+  const W=140;
+  const vw=vel.videoWidth,vh=vel.videoHeight;
+  if(vw&&vh){
+    const h=Math.min(Math.round(W*vh/vw),180);
+    card.style.height=h+'px';
+    videoQueue[i].cardHeight=h;
+  }
+}
+
+function removeFromQueue(i){
+  videoQueue.splice(i,1);
+  renderQueue();
+}
+
+let dragIdx=null;
+function onDragStart(e,i){
+  dragIdx=i;
+  document.getElementById('qc-'+i).classList.add('dragging');
+  e.dataTransfer.effectAllowed='move';
+}
+function onDragOver(e){e.preventDefault();e.dataTransfer.dropEffect='move'}
+function onDrop(e,i){
+  e.preventDefault();
+  if(dragIdx===null||dragIdx===i)return;
+
+  // 直接移动 DOM 节点，不重建（避免 video 重新加载闪黑）
+  const row=document.getElementById('queue-row');
+  const wrappers=[...row.querySelectorAll('[id^="qw-"]')];
+  const srcEl=document.getElementById('qw-'+dragIdx);
+  const tgtEl=document.getElementById('qw-'+i);
+  if(!srcEl||!tgtEl)return;
+
+  // FLIP: 记录所有卡片旧位置
+  const oldRects=wrappers.map(el=>el.getBoundingClientRect());
+
+  // 移动 DOM 节点
+  if(dragIdx<i){
+    tgtEl.after(srcEl);
+  }else{
+    tgtEl.before(srcEl);
+  }
+
+  // 重排数组
+  const [item]=videoQueue.splice(dragIdx,1);
+  videoQueue.splice(i,0,item);
+
+  // 更新所有 wrapper 的 id 和事件处理（索引变了）
+  const newWrappers=[...row.querySelectorAll('[id^="qw-"]')];
+  newWrappers.forEach((w,idx)=>{
+    w.id='qw-'+idx;
+    w.setAttribute('draggable','true');
+    w.setAttribute('ondragstart','onDragStart(event,'+idx+')');
+    w.setAttribute('ondrop','onDrop(event,'+idx+')');
+    w.setAttribute('onclick','updatePreview('+idx+')');
+    w.querySelector('.queue-card').id='qc-'+idx;
+    w.querySelector('.qc-name').setAttribute('onclick','');
+    w.querySelector('.qc-remove')?.setAttribute('onclick','event.stopPropagation();removeFromQueue('+idx+')');
+    const thumb=w.querySelector('.qc-thumb');
+    if(thumb)thumb.id='qcv-'+idx;
+  });
+
+  // 更新计数
+  document.getElementById('queue-count').textContent=videoQueue.length;
+
+  // FLIP 动画
+  requestAnimationFrame(()=>{
+    [...row.querySelectorAll('[id^="qw-"]')].forEach((w,j)=>{
+      if(j>=oldRects.length)return;
+      const nr=w.getBoundingClientRect();
+      const dx=oldRects[j].left-nr.left;
+      const dy=oldRects[j].top-nr.top;
+      if(dx||dy){
+        w.style.transition='none';
+        w.style.transform=`translate(${dx}px,${dy}px)`;
+        w.offsetHeight;
+        w.style.transition='';
+        w.style.transform='';
+      }
+    });
+  });
+}
+function onDragEnd(e){
+  if(dragIdx!==null){
+    document.getElementById('qc-'+dragIdx)?.classList.remove('dragging');
+  }
+  dragIdx=null;
+}
+
+let activeV='a', loading=false;
+
+function getActiveVideo(){return document.getElementById('video-preview-'+activeV)}
+function getBackVideo(){return document.getElementById('video-preview-'+(activeV==='a'?'b':'a'))}
+
+function updatePreview(i){
+  const wrap=document.getElementById('preview-wrap');
+  if(i===null||i>=videoQueue.length){wrap.classList.remove('show');return}
+  const src=videoQueue[i].path?`/api/preview/${encodeURIComponent(videoQueue[i].path)}`:'';
+  if(!src)return;
+
+  wrap.classList.add('show');
+  document.querySelectorAll('.queue-card').forEach((el,j)=>el.classList.toggle('active',j===i));
+  document.getElementById('preview-play-btn').textContent='▶';
+  document.getElementById('preview-bar-fill').style.width='0%';
+
+  // 点卡片时触发该卡片 metadata 加载（之前 preload=none 跳过了）
+  const qcv=document.getElementById('qcv-'+i);
+  const qc=document.getElementById('qc-'+i);
+  if(qcv&&qc&&!videoQueue[i].cardHeight){
+    if(qcv.readyState>=1)setCardHeight(qcv,qc,i);
+    else{qcv.preload='metadata';qcv.addEventListener('loadedmetadata',()=>setCardHeight(qcv,qc,i),{once:true})}
+  }
+
+  if(loading)return;
+  loading=true;
+
+  const back=getBackVideo();
+  // 先显示当前活跃 video（确保不是两个都隐藏）
+  if(!getActiveVideo().classList.contains('show')&&getActiveVideo().src){
+    getActiveVideo().style.display='block';
+  }
+  back.src=src;
+  back.oncanplay=()=>{
+    back.oncanplay=null;
+    // 切换
+    getActiveVideo().style.display='none';
+    getActiveVideo().pause();
+    back.style.display='block';
+    activeV=activeV==='a'?'b':'a';
+    updateCtrlBindings();
+    loading=false;
+  };
+  back.load();
+  // 超时保护：1秒后强制切换
+  setTimeout(()=>{if(back.oncanplay){back.oncanplay=null;getActiveVideo().style.display='none';getActiveVideo().pause();back.style.display='block';activeV=activeV==='a'?'b':'a';updateCtrlBindings();loading=false}},1000);
+}
+
+function updateCtrlBindings(){
+  const oldA=document.getElementById('video-preview-a');
+  const oldB=document.getElementById('video-preview-b');
+  oldA.removeEventListener('timeupdate',onTimeUpdate);
+  oldB.removeEventListener('timeupdate',onTimeUpdate);
+  oldA.removeEventListener('ended',onEnded);
+  oldB.removeEventListener('ended',onEnded);
+  const v=getActiveVideo();
+  v.addEventListener('timeupdate',onTimeUpdate);
+  v.addEventListener('ended',onEnded);
+}
+
+function onTimeUpdate(){
+  const v=getActiveVideo();
+  if(v.duration){
+    document.getElementById('preview-bar-fill').style.width=(v.currentTime/v.duration*100)+'%';
+  }
+}
+function onEnded(){document.getElementById('preview-play-btn').textContent='▶'}
+
+function togglePreviewPlay(){
+  const v=getActiveVideo();
+  if(v.paused){v.play();document.getElementById('preview-play-btn').textContent='⏸'}
+  else{v.pause();document.getElementById('preview-play-btn').textContent='▶'}
+}
+
+function seekPreview(e){
+  const bar=document.getElementById('preview-bar');
+  const rect=bar.getBoundingClientRect();
+  const pct=(e.clientX-rect.left)/rect.width;
+  const v=getActiveVideo();
+  if(v.duration)v.currentTime=pct*v.duration;
+  document.getElementById('preview-bar-fill').style.width=pct*100+'%';
+}
+
+function updateQueueStatus(i){
+  // 只更新第 i 个卡片的状态标签，不重建 DOM
+  const card=document.getElementById('qc-'+i);
+  if(!card)return;
+  const oldBadge=card.querySelector('.qc-status');
+  if(oldBadge)oldBadge.remove();
+  const v=videoQueue[i];
+  if(v.status==='done'||v.status==='fail'){
+    const cls=v.status==='done'?'done':'fail';
+    const badge=document.createElement('div');
+    badge.className='qc-status '+cls;
+    badge.textContent=v.status==='done'?'✓':'✗';
+    card.appendChild(badge);
+  }
+}
+
+// ==================== 定时 ====================
+function toggleSchedule(){document.getElementById('form-time').style.display=document.querySelector('input[name=schedule]:checked').value==='scheduled'?'block':'none'}
+
+// ==================== 发表 ====================
+async function startUpload(){
+  const account=document.getElementById('account-select').value;
+  const title=document.getElementById('form-title').value.trim();
+  const desc=document.getElementById('form-desc').value.trim();
+  const drama=document.getElementById('form-drama').value.trim();
+  const sched=document.querySelector('input[name=schedule]:checked').value==='scheduled';
+  const ptime=sched?document.getElementById('form-time').value.replace('T',' '):'';
+
+  if(!account){toast('请选择账号');return}
+  if(!videoQueue.length){toast('请添加视频');return}
+
+  const overlay=document.getElementById('overlay');overlay.classList.add('show');
+  document.getElementById('spinner').style.display='block';
+  document.getElementById('log-text').textContent='';
+
+  for(let i=0;i<videoQueue.length;i++){
+    const v=videoQueue[i];
+    document.getElementById('status-text').textContent=`上传中 (${i+1}/${videoQueue.length})`;
+    document.getElementById('progress-fill').style.width=Math.round(i/videoQueue.length*100)+'%';
+    document.getElementById('progress-text').textContent=v.name;
+
+    const res=await fetch('/api/upload',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({account,video_path:v.path,title,description:desc,cover_path:currentCoverPath,short_drama_name:drama,publish_time:ptime,location:'none'})});
+    const data=await res.json();
+    if(data.error){v.status='fail';document.getElementById('log-text').textContent+=`\n[失败] ${v.name}`}
+    else{
+      let done=false,st=null;
+      while(!done){await new Promise(r=>setTimeout(r,2000));const sr=await fetch('/api/upload/status');st=await sr.json();document.getElementById('status-text').textContent=st.status;done=!st.running}
+      v.status=st&&st.result&&st.result.status==='published'?'done':'fail';
+      document.getElementById('log-text').textContent+=`\n[${v.status==='done'?'成功':'失败'}] ${v.name}`;
+    }
+    updateQueueStatus(i);
+  }
+  document.getElementById('progress-fill').style.width='100%';
+  document.getElementById('status-text').textContent='全部完成';
+  document.getElementById('spinner').style.display='none';
+  videoDz.classList.remove('has-file');
+  videoDz.innerHTML='<div class="dz-icon">+</div><div class="dz-title">拖拽或点击选择视频</div><div class="dz-hint">MP4/H.264，不超过 20GB，支持多选</div>';
+  setTimeout(()=>overlay.classList.remove('show'),3000);
+}
+
+function toast(msg){const t=document.createElement('div');t.className='toast';t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),3000)}
+</script>
+</body>
+</html>

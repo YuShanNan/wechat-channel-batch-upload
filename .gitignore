@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.env
+venv/
+accounts/*/profile/
+accounts/*/profile.zip
+.screenshots/
+.playwright-cli/
+data/temp/
+data/results/
+csvs/*.csv
+*.log
+test_*.py
+test_*.mp4
+node_modules/
+.claude/
+accounts/*/auth.json
