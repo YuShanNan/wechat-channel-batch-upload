@@ -12,7 +12,7 @@ import mimetypes
 from pathlib import Path
 from datetime import datetime
 
-sys.stdout.reconfigure(encoding='utf-8')
+sys.stdout.reconfigure(encoding='utf-8') if sys.stdout else None
 
 from flask import Flask, render_template, request, jsonify, send_file, url_for
 

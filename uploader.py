@@ -12,7 +12,7 @@ from datetime import datetime
 from typing import Optional, TYPE_CHECKING
 
 # Windows 控制台 UTF-8
-sys.stdout.reconfigure(encoding='utf-8')
+sys.stdout.reconfigure(encoding='utf-8') if sys.stdout else None
 
 if TYPE_CHECKING:
     from playwright.async_api import Page, BrowserContext
