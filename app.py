@@ -20,7 +20,7 @@ def main():
     threading.Thread(target=run_flask, daemon=True).start()
     time.sleep(1)
 
-    webview.create_window("视频号上传", URL, width=1100, height=750)
+    webview.create_window("视频号上传", URL, width=1100, height=850, resizable=True)
     webview.start()
 
 
