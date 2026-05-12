@@ -2,17 +2,20 @@
 视频号批量上传核心引擎
 基于 Playwright Python 异步 API
 """
+from __future__ import annotations
+
 import asyncio
 import sys
 import os
 from pathlib import Path
 from datetime import datetime
-from typing import Optional
+from typing import Optional, TYPE_CHECKING
 
 # Windows 控制台 UTF-8
 sys.stdout.reconfigure(encoding='utf-8')
 
-from playwright.async_api import async_playwright, Page, BrowserContext
+if TYPE_CHECKING:
+    from playwright.async_api import Page, BrowserContext
 
 CREATE_URL = "https://channels.weixin.qq.com/platform/post/create"
 
@@ -33,6 +36,8 @@ class WeChatUploader:
         """启动浏览器，加载持久化 profile。
         无头时强制指定普通 Chrome UA，避免微信检测 HeadlessChrome。
         """
+        from playwright.async_api import async_playwright
+
         pw = await async_playwright().start()
         args = [
             "--mute-audio",

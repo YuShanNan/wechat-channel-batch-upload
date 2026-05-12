@@ -6,7 +6,6 @@
 import threading
 import time
 
-import webview
 from server import app
 
 PORT = 5050
@@ -14,6 +13,8 @@ URL = f"http://127.0.0.1:{PORT}"
 
 
 def main():
+    import webview
+
     def run_flask():
         app.run(host="127.0.0.1", port=PORT, debug=False)
 
