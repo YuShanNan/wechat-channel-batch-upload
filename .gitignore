@@ -15,6 +15,7 @@ test_*.mp4
 node_modules/
 .claude/
 accounts/*/auth.json
+data/accounts.json
 build/
 dist/
 *.spec
