@@ -5,10 +5,13 @@
 import json
 from pathlib import Path
 from typing import Optional
+import sys
 
-DATA_DIR = Path(__file__).parent / "data"
+_BASE_DIR = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
+
+DATA_DIR = _BASE_DIR / "data"
 ACCOUNTS_FILE = DATA_DIR / "accounts.json"
-ACCOUNTS_ROOT = Path(__file__).parent / "accounts"
+ACCOUNTS_ROOT = _BASE_DIR / "accounts"
 
 
 def load_accounts() -> dict:

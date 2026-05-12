@@ -24,14 +24,27 @@ from uploader import WeChatUploader, CREATE_URL
 app = Flask(__name__)
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 
-VIDEO_DIRS = [
-    r"E:\推文\视频号",
-]
+VIDEO_DIRS = []
+
+def _get_default_browse_dirs() -> list:
+    home = Path.home()
+    dirs = []
+    for name in ["Desktop", "Videos", "Documents"]:
+        p = home / name
+        if p.exists():
+            dirs.append(str(p))
+    for letter in "DEFGHIJK":
+        p = Path(f"{letter}:\\")
+        if p.exists():
+            dirs.append(str(p))
+    return dirs
 MEDIA_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".jpg", ".jpeg", ".png", ".webp"}
 
-RESULTS_DIR = Path(__file__).parent / "data" / "results"
+_BASE_DIR = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
+
+RESULTS_DIR = _BASE_DIR / "data" / "results"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
-TEMP_DIR = Path(__file__).parent / "data" / "temp"
+TEMP_DIR = _BASE_DIR / "data" / "temp"
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
 _upload_state = {
@@ -183,9 +196,9 @@ def api_browse():
     """浏览视频目录，返回文件列表"""
     dir_path = request.args.get("dir", "").strip()
     if not dir_path:
-        # 返回默认视频目录
+        sources = VIDEO_DIRS if VIDEO_DIRS else _get_default_browse_dirs()
         result = []
-        for d in VIDEO_DIRS:
+        for d in sources:
             p = Path(d)
             if p.exists():
                 result.append({
@@ -238,7 +251,8 @@ def api_finder():
         return jsonify({"files": []})
 
     results = []
-    for root_dir in VIDEO_DIRS:
+    sources = VIDEO_DIRS if VIDEO_DIRS else _get_default_browse_dirs()
+    for root_dir in sources:
         root = Path(root_dir)
         if not root.exists():
             continue
@@ -350,6 +364,8 @@ def api_start_upload():
 
             await uploader.close()
 
+            _cleanup_temp_files(video_path, cover_path)
+
             # 保存结果
             result_path = RESULTS_DIR / f"{account_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
             with open(result_path, "w", encoding="utf-8-sig", newline="") as f:
@@ -365,6 +381,15 @@ def api_start_upload():
 @app.route("/api/upload/status", methods=["GET"])
 def api_upload_status():
     return jsonify(_upload_state)
+
+def _cleanup_temp_files(*paths: str):
+    """删除 TEMP_DIR 内的暂存文件"""
+    for p in paths:
+        if not p:
+            continue
+        fp = Path(p)
+        if fp.parent == TEMP_DIR and fp.exists():
+            fp.unlink(missing_ok=True)
 
 # ==================== 启动 ====================
 
