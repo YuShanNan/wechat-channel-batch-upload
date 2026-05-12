@@ -158,6 +158,7 @@ def api_add_account_with_scan():
 
                 safe_name = _sanitize_nickname(nickname)
                 result = account_mgr.add_account(safe_name, nickname)
+                account_mgr.update_last_login(safe_name)
 
                 _scan_state["result"] = {
                     "success": True,
