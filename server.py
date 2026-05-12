@@ -5,6 +5,7 @@ Flask + 拖拽上传界面 + Playwright 后端
 import sys
 import json
 import csv
+import re
 import asyncio
 import threading
 import mimetypes
@@ -15,8 +16,10 @@ sys.stdout.reconfigure(encoding='utf-8')
 
 from flask import Flask, render_template, request, jsonify, send_file, url_for
 
+import shutil
+
 import accounts as account_mgr
-from uploader import WeChatUploader
+from uploader import WeChatUploader, CREATE_URL
 
 app = Flask(__name__)
 app.config['TEMPLATES_AUTO_RELOAD'] = True
@@ -38,11 +41,31 @@ _upload_state = {
     "result": None,
 }
 
+_scan_state = {
+    "scanning": False,
+    "result": None,
+}
+
+_debug_mode = False
+
 # ==================== 页面 ====================
 
 @app.route("/")
 def index():
     return render_template("index.html")
+
+# ==================== Debug ====================
+
+@app.route("/api/debug", methods=["GET"])
+def api_debug_get():
+    return jsonify({"debug": _debug_mode})
+
+@app.route("/api/debug", methods=["POST"])
+def api_debug_set():
+    global _debug_mode
+    data = request.get_json()
+    _debug_mode = bool(data.get("debug", False))
+    return jsonify({"debug": _debug_mode})
 
 # ==================== 账号 API ====================
 
@@ -74,7 +97,7 @@ def api_login_account(name):
 
     def do_login():
         async def _login():
-            uploader = WeChatUploader(profile_dir)
+            uploader = WeChatUploader(profile_dir, headless=False)
             await uploader.start()
             success = await uploader.ensure_login(timeout_seconds=180)
             if success:
@@ -83,6 +106,75 @@ def api_login_account(name):
 
     threading.Thread(target=do_login, daemon=True).start()
     return jsonify({"message": "浏览器已打开，请扫码登录"})
+
+# ==================== 扫码添加账号 API ====================
+
+@app.route("/api/accounts/add-with-scan", methods=["POST"])
+def api_add_account_with_scan():
+    """扫码添加账号：打开浏览器 → 用户扫码 → 自动抓取昵称 → 创建账号"""
+    global _scan_state
+
+    if _scan_state["scanning"]:
+        return jsonify({"error": "已有扫码进行中"}), 409
+
+    _scan_state["scanning"] = True
+    _scan_state["result"] = None
+
+    def do_scan():
+        async def _scan():
+            global _scan_state
+            temp_name = f"scan_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            profile_dir = account_mgr.ACCOUNTS_ROOT / temp_name / "profile"
+            uploader = WeChatUploader(profile_dir, headless=False)
+            await uploader.start()
+
+            try:
+                success = await uploader.ensure_login(timeout_seconds=180)
+                if not success:
+                    _scan_state["scanning"] = False
+                    _scan_state["result"] = {"error": "登录超时"}
+                    await uploader.close()
+                    return
+
+                page = await uploader._context.new_page()
+                await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=30000)
+                await page.wait_for_timeout(3000)
+
+                nickname = await uploader.scrape_nickname(page)
+                await page.close()
+
+                safe_name = _sanitize_nickname(nickname)
+                result = account_mgr.add_account(safe_name, nickname)
+
+                _scan_state["result"] = {
+                    "success": True,
+                    "account": result.get("account", {"name": safe_name, "nickname": nickname}),
+                }
+            except Exception as e:
+                _scan_state["result"] = {"error": str(e)}
+            finally:
+                _scan_state["scanning"] = False
+                await uploader.close()
+                shutil.rmtree(profile_dir, ignore_errors=True)
+
+        asyncio.run(_scan())
+
+    threading.Thread(target=do_scan, daemon=True).start()
+    return jsonify({"message": "浏览器已打开，请扫码登录"}), 202
+
+
+@app.route("/api/accounts/add-with-scan/status", methods=["GET"])
+def api_scan_status():
+    """查询扫码添加的状态"""
+    return jsonify(_scan_state)
+
+
+def _sanitize_nickname(nickname: str) -> str:
+    cleaned = re.sub(r'[^一-龥a-zA-Z0-9_\-]', '', nickname)
+    if not cleaned:
+        cleaned = f"user_{datetime.now().strftime('%H%M%S')}"
+    return cleaned[:30]
+
 
 # ==================== 文件浏览 API ====================
 
@@ -222,7 +314,7 @@ def api_start_upload():
     def do_upload():
         async def _upload():
             global _upload_state
-            uploader = WeChatUploader(profile_dir)
+            uploader = WeChatUploader(profile_dir, headless=not _debug_mode)
             await uploader.start()
 
             if not await uploader.ensure_login():

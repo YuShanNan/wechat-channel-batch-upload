@@ -23,22 +23,37 @@ class WeChatUploader:
     每个实例绑定一个账号 profile 目录
     """
 
-    def __init__(self, profile_dir: Path, headless: bool = False):
+    def __init__(self, profile_dir: Path, headless: bool = True):
         self.profile_dir = Path(profile_dir)
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         self.headless = headless
         self._context: Optional[BrowserContext] = None
 
     async def start(self):
-        """启动浏览器，加载持久化 profile"""
+        """启动浏览器，加载持久化 profile。
+        无头时强制指定普通 Chrome UA，避免微信检测 HeadlessChrome。
+        """
         pw = await async_playwright().start()
+        args = [
+            "--mute-audio",
+            "--disable-blink-features=AutomationControlled",
+            "--no-sandbox",
+            "--disable-dev-shm-usage",
+            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
+        ]
         self._context = await pw.chromium.launch_persistent_context(
             user_data_dir=str(self.profile_dir),
             headless=self.headless,
             channel="chrome",
             viewport={"width": 1440, "height": 900},
             locale="zh-CN",
+            args=args,
         )
+        await self._context.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
+            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
+            window.chrome = {runtime: {}};
+        """)
         return self
 
     async def close(self):
@@ -74,6 +89,18 @@ class WeChatUploader:
         await page.close()
         print("[登录] 超时，未检测到登录成功")
         return False
+
+    async def scrape_nickname(self, page: Page) -> str:
+        """
+        从登录后的页面抓取当前用户的视频号昵称。
+        昵称位于左侧边栏 .account-info .name 元素中。
+        """
+        el = page.locator(".account-info .name").first
+        if await el.count() > 0:
+            text = (await el.text_content()).strip()
+            if text:
+                return text
+        raise RuntimeError("无法获取昵称")
 
     async def upload_single(
         self,
@@ -112,7 +139,10 @@ class WeChatUploader:
             print(f"\n[上传] {title}")
 
             # 1. 导航到创作页
-            await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=30000)
+            await page.goto(CREATE_URL, wait_until="load", timeout=60000)
+            # 等待表单渲染完成——标题输入框出现即表示页面就绪
+            title_box = page.get_by_role("textbox", name="概括视频主要内容")
+            await title_box.wait_for(state="visible", timeout=60000)
             await page.wait_for_timeout(2000)
 
             if "login" in page.url:
@@ -122,9 +152,14 @@ class WeChatUploader:
 
             # 2. 上传视频文件
             print("  [1/7] 上传视频文件...")
-            # 找隐藏的 file input (.ant-upload-btn 内的 input[type=file])
-            file_input = page.locator("input[type=file]").first
-            await file_input.set_input_files(video_path)
+            # 无头模式下 ant-upload 的隐藏 input 可能不挂载，改用 file chooser 机制
+            async with page.expect_file_chooser() as fc_info:
+                # 点击上传拖拽区触发文件选择器
+                upload_zone = page.locator(".ant-upload-btn").first
+                await upload_zone.click()
+                await page.wait_for_timeout(500)
+            file_chooser = await fc_info.value
+            await file_chooser.set_files(video_path)
 
             # 等待上传完成 —— 检测封面预览区域出现
             await self._wait_for_upload_complete(page)
@@ -135,8 +170,6 @@ class WeChatUploader:
 
             # 4. 填写短标题
             print(f"  [3/7] 填写标题: {title}")
-            title_box = page.get_by_role("textbox", name="概括视频主要内容")
-            await title_box.wait_for(state="visible", timeout=15000)
             await title_box.fill(title)
 
             # 5. 填写描述
@@ -389,24 +422,24 @@ class WeChatUploader:
         await publish_btn.wait_for(state="visible", timeout=10000)
         await publish_btn.click()
 
-    async def _verify_publish(self, page: Page, timeout_ms: int = 15000) -> bool:
-        """验证发表是否成功"""
-        # 策略1: URL 跳离 create 页面
+    async def _verify_publish(self, page: Page, timeout_ms: int = 30000) -> bool:
+        """验证发表是否成功——URL 跳到 post/list 或出现「已发表」"""
         try:
             await page.wait_for_url(
-                lambda url: "/post/create" not in url,
+                lambda url: "/post/list" in url,
                 timeout=timeout_ms,
             )
+            print("    已跳转到 post/list")
             return True
         except Exception:
             pass
 
-        # 策略2: 成功提示
         try:
             await page.wait_for_selector(
-                'text=/已发表|发表成功|success/i',
-                timeout=5000,
+                'text=/已发表|发表成功/i',
+                timeout=10000,
             )
+            print("    检测到[已发表]提示")
             return True
         except Exception:
             pass

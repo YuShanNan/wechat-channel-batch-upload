@@ -14,11 +14,6 @@
   html{font-size:15px}
   body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);min-height:100vh}
 
-  .header{background:var(--card);border-bottom:1px solid var(--border);padding:0 24px;height:56px;display:flex;align-items:center;justify-content:space-between}
-  .header h1{font-size:17px;font-weight:600}
-  .header .acct-select{padding:6px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px;outline:none;background:var(--card);min-width:160px}
-  .header .acct-select:focus{border-color:var(--green)}
-
   .main{max-width:1060px;margin:0 auto;padding:24px;display:grid;grid-template-columns:1fr 340px;gap:24px}
   .left,.right{display:flex;flex-direction:column;gap:16px}
   .card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px}
@@ -99,7 +94,7 @@
   /* 表单 */
   .form-group{display:flex;flex-direction:column;gap:4px}
   .form-group label{font-size:13px;font-weight:500;color:#555}
-  .form-group input,.form-group textarea{
+  .form-group input:not([type=radio]):not([type=checkbox]),.form-group textarea{
     padding:10px 12px;border:1px solid var(--border);border-radius:6px;
     font-size:14px;font-family:inherit;outline:none;width:100%;transition:border-color .2s;
   }
@@ -109,6 +104,9 @@
   .radio-row{display:flex;gap:16px;padding:8px 0;align-items:center}
   .radio-row label{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px}
   .radio-row input[type=radio]{accent-color:var(--green)}
+
+  .acct-select{padding:6px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px;outline:none;background:var(--card);width:100%}
+  .acct-select:focus{border-color:var(--green)}
 
   .btn{padding:10px 24px;border:none;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer;transition:all .15s;font-family:inherit}
   .btn:disabled{opacity:.5;cursor:not-allowed}
@@ -130,15 +128,37 @@
   .toast{position:fixed;top:20px;right:20px;background:#333;color:#fff;padding:10px 20px;border-radius:6px;font-size:13px;z-index:999;animation:slideIn .3s ease}
   @keyframes slideIn{from{transform:translateX(100px);opacity:0}}
 
+  /* 账号管理 */
+  .acct-row{display:flex;gap:6px}
+  .acct-row .acct-select{flex:1}
+  .btn-sm{padding:6px 12px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;font-family:inherit;transition:all .15s}
+  .btn-mgmt{background:var(--border);color:#555;white-space:nowrap}
+  .btn-mgmt:hover{background:#d5d5d5}
+  .acct-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:101;align-items:center;justify-content:center}
+  .acct-overlay.show{display:flex}
+  .acct-overlay .modal{background:var(--card);border-radius:12px;padding:28px;max-width:520px;width:90%;max-height:80vh;overflow-y:auto}
+  .acct-overlay .modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+  .acct-overlay .modal-header h2{font-size:17px;font-weight:600}
+  .acct-overlay .modal-close{background:none;border:none;font-size:20px;color:var(--text2);cursor:pointer;padding:0;line-height:1}
+  .acct-overlay .modal-close:hover{color:var(--text)}
+  .acct-add-form{display:flex;gap:8px;margin-bottom:16px}
+  .acct-add-form input{padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;outline:none;flex:1;min-width:0}
+  .acct-add-form input:focus{border-color:var(--green)}
+  .acct-table{width:100%;border-collapse:collapse;font-size:13px}
+  .acct-table th,.acct-table td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--border)}
+  .acct-table th{font-weight:500;color:var(--text2);font-size:11px}
+  .acct-table td{color:var(--text)}
+  .acct-table .acct-actions{display:flex;gap:6px}
+  .acct-empty{padding:24px;text-align:center;color:var(--text2);font-size:13px}
+
+  .debug-toggle{position:fixed;left:8px;bottom:8px;font-size:10px;color:#ccc;cursor:pointer;user-select:none;z-index:200;transition:color .2s}
+  .debug-toggle:hover{color:#999}
+  .debug-toggle.active{color:#07c160}
+
   @media(max-width:800px){.main{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
-
-<div class="header">
-  <h1>视频号上传</h1>
-  <select class="acct-select" id="account-select"><option value="">选择账号…</option></select>
-</div>
 
 <div class="main">
   <div class="left">
@@ -208,9 +228,33 @@
           <input type="datetime-local" id="form-time" style="display:none">
         </div>
         <div style="font-size:13px;color:var(--text2)">位置: 不显示</div>
+        <div class="form-group">
+          <label>账号</label>
+          <div class="acct-row">
+            <select class="acct-select" id="account-select"><option value="">选择账号…</option></select>
+            <button class="btn-sm btn-mgmt" onclick="openAccountManager()">管理</button>
+          </div>
+        </div>
       </div>
     </div>
     <button class="btn btn-publish" id="btn-publish" onclick="startUpload()">发表</button>
+  </div>
+</div>
+
+<div class="acct-overlay" id="acct-overlay" onclick="closeAccountManager()">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <h2>账号管理</h2>
+      <button class="modal-close" onclick="closeAccountManager()">✕</button>
+    </div>
+    <div class="acct-add-form">
+      <button class="btn-sm" style="background:var(--green);color:#fff;width:100%;padding:10px;font-size:14px" onclick="addAccount()">添加账号（扫码自动获取昵称）</button>
+    </div>
+    <table class="acct-table">
+      <thead><tr><th>昵称</th><th>最后登录</th><th>操作</th></tr></thead>
+      <tbody id="acct-tbody"></tbody>
+    </table>
+    <div class="acct-empty" id="acct-empty" style="display:none">暂无账号，请添加</div>
   </div>
 </div>
 
@@ -231,10 +275,104 @@ let accounts=[], videoQueue=[], currentCoverPath='';
 async function loadAccounts(){
   const res=await fetch('/api/accounts'); const data=await res.json();
   accounts=data.accounts||[];
-  document.getElementById('account-select').innerHTML='<option value="">选择账号…</option>'+
-    accounts.map(a=>`<option value="${a.name}">${a.name} (${a.nickname||''})</option>`).join('');
+  refreshSelect();
+  refreshAccountTable();
 }
 loadAccounts();
+
+async function reloadAccounts(){
+  const res=await fetch('/api/accounts'); const data=await res.json();
+  accounts=data.accounts||[];
+  refreshSelect();
+  refreshAccountTable();
+}
+
+function refreshSelect(){
+  const sel=document.getElementById('account-select');
+  const cur=sel.value;
+  sel.innerHTML='<option value="">选择账号…</option>'+
+    accounts.map(a=>`<option value="${a.name}">${a.nickname||a.name}</option>`).join('');
+  sel.value=accounts.some(a=>a.name===cur)?cur:'';
+}
+
+function refreshAccountTable(){
+  const tbody=document.getElementById('acct-tbody');
+  const empty=document.getElementById('acct-empty');
+  if(!accounts.length){
+    tbody.innerHTML='';
+    empty.style.display='';
+    return;
+  }
+  empty.style.display='none';
+  tbody.innerHTML=accounts.map(a=>`<tr>
+    <td>${esc(a.nickname||'')}</td>
+    <td>${esc(a.last_login||'未登录')}</td>
+    <td><div class="acct-actions">
+      <button class="btn-sm btn-mgmt" onclick="loginAccount('${esc(a.name)}')">登录</button>
+      <button class="btn-sm" style="background:var(--red);color:#fff" onclick="deleteAccount('${esc(a.name)}')">删除</button>
+    </div></td>
+  </tr>`).join('');
+}
+
+function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;')}
+
+function openAccountManager(){
+  document.getElementById('acct-overlay').classList.add('show');
+  refreshAccountTable();
+}
+function closeAccountManager(){
+  document.getElementById('acct-overlay').classList.remove('show');
+}
+
+async function addAccount(){
+  const res=await fetch('/api/accounts/add-with-scan',{method:'POST'});
+  const data=await res.json();
+  if(data.error){toast(data.error);return}
+  toast('浏览器已打开，请扫码登录');
+
+  let done=false;
+  for(let i=0;i<90;i++){
+    await new Promise(r=>setTimeout(r,2000));
+    const sr=await fetch('/api/accounts/add-with-scan/status');
+    const st=await sr.json();
+    if(!st.scanning){
+      done=true;
+      if(st.result&&st.result.success){
+        accounts.push(st.result.account);
+        refreshSelect();
+        refreshAccountTable();
+        toast('账号已添加: '+st.result.account.nickname);
+      }else{
+        toast('添加失败: '+(st.result?st.result.error:'未知错误'));
+      }
+      break;
+    }
+  }
+  if(!done)toast('添加超时，请重试');
+}
+
+async function deleteAccount(name){
+  if(!confirm(`确定删除账号 ${name}？此操作不删除浏览器数据。`))return;
+  await fetch('/api/accounts/'+encodeURIComponent(name),{method:'DELETE'});
+  await reloadAccounts();
+  toast('已删除');
+}
+
+async function loginAccount(name){
+  const res=await fetch('/api/accounts/'+encodeURIComponent(name)+'/login',{method:'POST'});
+  const data=await res.json();
+  if(data.error){toast(data.error);return}
+  toast('浏览器已打开，请扫码登录');
+  let lastSeen=null;
+  for(let i=0;i<60;i++){
+    await new Promise(r=>setTimeout(r,3000));
+    await reloadAccounts();
+    const acct=accounts.find(a=>a.name===name);
+    const cur=acct?acct.last_login:'';
+    if(cur&&cur!==lastSeen){lastSeen=cur;refreshAccountTable()}
+    if(cur&&cur!=='')break;
+  }
+}
 
 // ==================== 视频上传 ====================
 const videoDz=document.getElementById('video-dz');
@@ -592,6 +730,23 @@ async function startUpload(){
 }
 
 function toast(msg){const t=document.createElement('div');t.className='toast';t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),3000)}
+
+let debugMode=false;
+async function toggleDebug(){
+  debugMode=!debugMode;
+  const el=document.getElementById('debug-toggle');
+  el.classList.toggle('active',debugMode);
+  el.textContent=debugMode?'debug on':'debug';
+  await fetch('/api/debug',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({debug:debugMode})});
+}
+(async()=>{
+  const r=await fetch('/api/debug');const d=await r.json();
+  debugMode=d.debug;
+  const el=document.getElementById('debug-toggle');
+  if(debugMode)el.classList.add('active');
+  el.textContent=debugMode?'debug on':'debug';
+})();
 </script>
+<div class="debug-toggle" id="debug-toggle" onclick="toggleDebug()" title="切换有头/无头浏览器">debug</div>
 </body>
 </html>
