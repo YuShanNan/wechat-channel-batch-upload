@@ -328,7 +328,7 @@ async function addAccount(){
   const res=await fetch('/api/accounts/add-with-scan',{method:'POST'});
   const data=await res.json();
   if(data.error){toast(data.error);return}
-  toast('浏览器已打开，请扫码登录');
+  toast('网页打开中，请稍等');
 
   let done=false;
   for(let i=0;i<90;i++){
@@ -362,7 +362,7 @@ async function loginAccount(name){
   const res=await fetch('/api/accounts/'+encodeURIComponent(name)+'/login',{method:'POST'});
   const data=await res.json();
   if(data.error){toast(data.error);return}
-  toast('浏览器已打开，请扫码登录');
+  toast('网页打开中，请稍等');
   let lastSeen=null;
   for(let i=0;i<60;i++){
     await new Promise(r=>setTimeout(r,3000));
@@ -470,14 +470,13 @@ function renderQueue(){
   previewCard.style.display='';
 
   const W=140;
-  const defH=Math.round(W/16*9);
   row.innerHTML=videoQueue.map((v,i)=>{
     const cls=v.status==='done'?'done':v.status==='fail'?'fail':'';
     const src=v.path?`/api/preview/${encodeURIComponent(v.path)}`:'';
-    const h=v.cardHeight||defH;
+    const h=v.cardHeight||78;
     return `<div id="qw-${i}" style="display:flex;flex-direction:column;align-items:center;gap:2px" onclick="updatePreview(${i})" draggable="true" onDragStart="onDragStart(event,${i})" onDragOver="onDragOver(event)" onDrop="onDrop(event,${i})" onDragEnd="onDragEnd(event)">
       <div class="queue-card${i===0?' active':''}" id="qc-${i}" style="width:${W}px;height:${h}px">
-        ${src?`<video class="qc-thumb" id="qcv-${i}" src="${src}" preload="metadata" muted></video>`:`<div class="qc-thumb" id="qcv-${i}" style="display:flex;align-items:center;justify-content:center;color:#666;font-size:11px">...</div>`}
+        ${src?`<video class="qc-thumb" id="qcv-${i}" src="${src}" preload="metadata" muted onloadedmetadata="setCardHeight(this,document.getElementById('qc-'+${i}),${i})"></video>`:`<div class="qc-thumb" id="qcv-${i}" style="display:flex;align-items:center;justify-content:center;color:#666;font-size:11px">...</div>`}
         ${cls?`<div class="qc-status ${cls}">${cls==='done'?'✓':'✗'}</div>`:''}
         <div class="qc-remove" onclick="event.stopPropagation();removeFromQueue(${i})">✕</div>
       </div>
@@ -500,7 +499,7 @@ function setCardHeight(vel,card,i){
   const W=140;
   const vw=vel.videoWidth,vh=vel.videoHeight;
   if(vw&&vh){
-    const h=Math.min(Math.round(W*vh/vw),180);
+    const h=Math.round(W*vh/vw);
     card.style.height=h+'px';
     videoQueue[i].cardHeight=h;
   }

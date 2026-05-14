@@ -94,6 +94,14 @@ def update_last_login(name: str):
         save_accounts(data)
 
 
+def clear_last_login(name: str):
+    """清除最后登录时间（标记账号失效）"""
+    data = load_accounts()
+    if name in data["accounts"]:
+        data["accounts"][name]["last_login"] = ""
+        save_accounts(data)
+
+
 def _timestamp() -> str:
     from datetime import datetime
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")

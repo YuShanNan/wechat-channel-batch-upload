@@ -20,6 +20,9 @@ import shutil
 
 import accounts as account_mgr
 from uploader import WeChatUploader, CREATE_URL
+from logger import get_logger
+
+log = get_logger("server")
 
 app = Flask(__name__)
 app.config['TEMPLATES_AUTO_RELOAD'] = True
@@ -52,6 +55,8 @@ _upload_state = {
     "status": "",
     "logs": [],
     "result": None,
+    "cancelled": False,
+    "_uploader": None,
 }
 
 _scan_state = {
@@ -102,6 +107,75 @@ def api_add_account():
 def api_remove_account(name):
     return jsonify(account_mgr.remove_account(name))
 
+# ==================== 账号有效性检测 ====================
+
+_check_state = {"checking": False, "results": {}, "done": False}
+
+@app.route("/api/accounts/check", methods=["POST"])
+def api_check_accounts():
+    """启动后台检测所有已登录账号的有效性"""
+    global _check_state
+    if _check_state["checking"]:
+        return jsonify({"error": "检测进行中"}), 409
+
+    accounts_to_check = [a for a in account_mgr.list_accounts() if a.get("last_login")]
+    if not accounts_to_check:
+        return jsonify({"message": "无已登录账号"})
+
+    _check_state = {"checking": True, "results": {}, "done": False}
+
+    def do_check():
+        async def _check():
+            global _check_state
+            for acct in accounts_to_check:
+                name = acct["name"]
+                profile_dir = Path(acct["profile_dir"])
+                if not profile_dir.exists():
+                    _check_state["results"][name] = False
+                    continue
+                try:
+                    uploader = WeChatUploader(profile_dir, headless=True)
+                    await uploader.start()
+                    valid = await uploader.ensure_login(timeout_seconds=30)
+                    await uploader.close()
+                    _check_state["results"][name] = valid
+                except Exception:
+                    _check_state["results"][name] = False
+            if not _check_state["results"].get(name, True):
+                account_mgr.clear_last_login(name)
+            _check_state["checking"] = False
+            _check_state["done"] = True
+        asyncio.run(_check())
+
+    threading.Thread(target=do_check, daemon=True).start()
+    return jsonify({"message": "检测已启动"}), 202
+
+@app.route("/api/accounts/check/status", methods=["GET"])
+def api_check_status():
+    return jsonify(_check_state)
+
+@app.route("/api/accounts/<name>/dashboard", methods=["POST"])
+def api_open_dashboard(name):
+    """用同一 profile 在 Chrome 窗口中打开视频号后台"""
+    profile_dir = account_mgr.get_profile_dir(name)
+    if not profile_dir:
+        return jsonify({"error": f"账号 {name} 不存在"}), 404
+
+    def do_open():
+        async def _open():
+            uploader = WeChatUploader(profile_dir, headless=False)
+            try:
+                await uploader.start()
+                page = await uploader._context.new_page()
+                await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=30000)
+                # 不调用 uploader.close()，窗口保持打开供用户操作
+            except Exception as e:
+                log.error(f"打开后台失败 [{name}]: {e}", exc_info=True)
+        asyncio.run(_open())
+
+    threading.Thread(target=do_open, daemon=True).start()
+    return jsonify({"message": "已打开后台"})
+
 @app.route("/api/accounts/<name>/login", methods=["POST"])
 def api_login_account(name):
     profile_dir = account_mgr.get_profile_dir(name)
@@ -111,14 +185,21 @@ def api_login_account(name):
     def do_login():
         async def _login():
             uploader = WeChatUploader(profile_dir, headless=False)
-            await uploader.start()
-            success = await uploader.ensure_login(timeout_seconds=180)
-            if success:
-                account_mgr.update_last_login(name)
+            try:
+                await uploader.start()
+                success = await uploader.ensure_login(timeout_seconds=180)
+                if success:
+                    account_mgr.update_last_login(name)
+                else:
+                    account_mgr.clear_last_login(name)
+            except Exception as e:
+                log.error(f"登录失败 [{name}]: {e}", exc_info=True)
+            finally:
+                await uploader.close()
         asyncio.run(_login())
 
     threading.Thread(target=do_login, daemon=True).start()
-    return jsonify({"message": "浏览器已打开，请扫码登录"})
+    return jsonify({"message": "网页打开中，请稍等"})
 
 # ==================== 扫码添加账号 API ====================
 
@@ -139,11 +220,12 @@ def api_add_account_with_scan():
             temp_name = f"scan_{datetime.now().strftime('%Y%m%d%H%M%S')}"
             profile_dir = account_mgr.ACCOUNTS_ROOT / temp_name / "profile"
             uploader = WeChatUploader(profile_dir, headless=False)
-            await uploader.start()
 
             try:
+                await uploader.start()
                 success = await uploader.ensure_login(timeout_seconds=180)
                 if not success:
+                    log.warning(f"扫码添加账号: 登录超时")
                     _scan_state["scanning"] = False
                     _scan_state["result"] = {"error": "登录超时"}
                     await uploader.close()
@@ -165,6 +247,7 @@ def api_add_account_with_scan():
                     "account": result.get("account", {"name": safe_name, "nickname": nickname}),
                 }
             except Exception as e:
+                log.error(f"扫码添加账号失败: {e}", exc_info=True)
                 _scan_state["result"] = {"error": str(e)}
             finally:
                 _scan_state["scanning"] = False
@@ -174,7 +257,7 @@ def api_add_account_with_scan():
         asyncio.run(_scan())
 
     threading.Thread(target=do_scan, daemon=True).start()
-    return jsonify({"message": "浏览器已打开，请扫码登录"}), 202
+    return jsonify({"message": "网页打开中，请稍等"}), 202
 
 
 @app.route("/api/accounts/add-with-scan/status", methods=["GET"])
@@ -324,12 +407,15 @@ def api_start_upload():
         "status": "开始上传...",
         "logs": [],
         "result": None,
+        "cancelled": False,
+        "_uploader": None,
     }
 
     def do_upload():
         async def _upload():
             global _upload_state
             uploader = WeChatUploader(profile_dir, headless=not _debug_mode)
+            _upload_state["_uploader"] = uploader
             await uploader.start()
 
             if not await uploader.ensure_login():
@@ -383,6 +469,26 @@ def api_start_upload():
 def api_upload_status():
     return jsonify(_upload_state)
 
+@app.route("/api/upload/cancel", methods=["POST"])
+def api_cancel_upload():
+    """取消当前上传，关闭浏览器"""
+    global _upload_state
+    log.info("收到取消上传请求")
+    _upload_state["cancelled"] = True
+    uploader = _upload_state.get("_uploader")
+    if uploader:
+        def do_close():
+            async def _close():
+                await uploader.close()
+            asyncio.run(_close())
+        threading.Thread(target=do_close, daemon=True).start()
+        log.info("已发起关闭浏览器")
+    else:
+        log.warning("取消时无 uploader 引用")
+    _upload_state["running"] = False
+    _upload_state["status"] = "已取消"
+    return jsonify({"message": "已取消"})
+
 def _cleanup_temp_files(*paths: str):
     """删除 TEMP_DIR 内的暂存文件"""
     for p in paths:
@@ -406,7 +512,7 @@ def main():
     if args.dirs:
         VIDEO_DIRS.extend(args.dirs)
 
-    print(f"视频号上传面板: http://{args.host}:{args.port}")
+    log.info(f"视频号上传面板: http://{args.host}:{args.port}")
     app.run(host=args.host, port=args.port, debug=args.debug)
 
 if __name__ == "__main__":
