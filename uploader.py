@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import subprocess
 import sys
 import os
@@ -19,7 +20,7 @@ sys.stdout.reconfigure(encoding='utf-8') if sys.stdout else None
 log = get_logger("uploader")
 
 if TYPE_CHECKING:
-    from playwright.async_api import Page, BrowserContext
+    from playwright.async_api import Page, BrowserContext, Frame
 
 CREATE_URL = "https://channels.weixin.qq.com/platform/post/create"
 
@@ -35,6 +36,7 @@ class WeChatUploader:
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         self.headless = headless
         self._context: Optional[BrowserContext] = None
+        self._upload_progress = 0
 
     async def start(self):
         """启动浏览器。headless=True 时用 --headless=new 避免任务栏图标。"""
@@ -111,7 +113,8 @@ class WeChatUploader:
             f'ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"'
         )
         try:
-            subprocess.run(cmd, capture_output=True, timeout=10)
+            subprocess.run(cmd, capture_output=True, timeout=10,
+                         creationflags=0x08000000)
         except Exception:
             pass
 
@@ -152,6 +155,78 @@ class WeChatUploader:
             if text:
                 return text
         raise RuntimeError("无法获取昵称")
+
+    # ==================== QR 码 ====================
+
+    async def _find_qrcode_frame(self, page: Page) -> "Frame":
+        """找到包含二维码的最内层 iframe（reverse 从内到外）"""
+        for frame in reversed(page.frames):
+            if await frame.locator('text=微信扫码登录').count() > 0:
+                return frame
+        raise RuntimeError("未找到二维码 iframe")
+
+    async def capture_qrcode(self, page: Page) -> str:
+        """截取登录页二维码，返回 base64 data URL"""
+        frame = await self._find_qrcode_frame(page)
+        # 找到二维码所在的容器，截图整个二维码区域
+        qr_area = frame.locator("img").first
+        await qr_area.wait_for(state="visible", timeout=30000)
+        screenshot = await qr_area.screenshot(type="png")
+        import base64
+        return "data:image/png;base64," + base64.b64encode(screenshot).decode()
+
+    async def check_qrcode_expired(self, page: Page) -> bool:
+        """检测二维码是否已过期（仅匹配可见元素）"""
+        frame = await self._find_qrcode_frame(page)
+        expired = frame.locator('text=二维码已过期').locator(':visible')
+        if await expired.count() > 0:
+            return True
+        return False
+
+    async def check_qrcode_scanned(self, page: Page) -> str:
+        """检测二维码扫描状态，返回 'waiting'|'scanned'|'confirming'"""
+        frame = await self._find_qrcode_frame(page)
+        if await frame.locator('text=需在手机上进行确认').locator(':visible').count() > 0:
+            return "confirming"
+        if await frame.locator('text=已扫码').locator(':visible').count() > 0:
+            return "scanned"
+        return "waiting"
+
+    async def wait_for_scan(self, page: Page, timeout_seconds: int = 180) -> str:
+        """
+        等待用户扫码登录。
+        返回 'logged_in' 表示登录成功，'expired' 表示二维码过期需刷新。
+        """
+        log.info(f"[QR] 等待扫码登录（{timeout_seconds}秒超时）...")
+        for i in range(timeout_seconds * 2):
+            # 优先检测登录成功
+            if await page.locator(".account-info").count() > 0:
+                log.info("[QR] 登录成功！")
+                return "logged_in"
+
+            # 检测二维码过期
+            try:
+                if await self.check_qrcode_expired(page):
+                    log.info("[QR] 二维码已过期")
+                    return "expired"
+            except Exception:
+                pass  # iframe 可能暂时不可用
+
+            # 检测扫码状态
+            try:
+                status = await self.check_qrcode_scanned(page)
+                if status == "scanned" and i % 20 == 0:
+                    log.info("[QR] 用户已扫码，等待确认...")
+                elif status == "confirming" and i % 20 == 0:
+                    log.info("[QR] 用户已扫码确认，等待登录...")
+            except Exception:
+                pass
+
+            await page.wait_for_timeout(500)
+        log.warning("[QR] 扫码等待超时")
+        return "timeout"
+
+    # ==================== 上传 ====================
 
     async def upload_single(
         self,
@@ -282,7 +357,17 @@ class WeChatUploader:
             cls = await publish_btn.get_attribute("class") or ""
             if "weui-desktop-btn_disabled" not in cls:
                 log.info("上传完成，发表按钮已启用")
+                self._upload_progress = 99
                 return
+            # 读取 WeChat 原生进度条
+            try:
+                el = page.locator(".ant-progress-bg").first
+                style = await el.get_attribute("style") or ""
+                m = re.search(r"width:\s*([\d.]+)%", style)
+                if m:
+                    self._upload_progress = float(m.group(1))
+            except Exception:
+                pass
             await page.wait_for_timeout(500)
         log.info("等待超时，发表按钮仍为禁用状态")
 

@@ -7,6 +7,7 @@ import json
 import csv
 import re
 import asyncio
+import atexit
 import threading
 import mimetypes
 from pathlib import Path
@@ -50,18 +51,34 @@ RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 TEMP_DIR = _BASE_DIR / "data" / "temp"
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
 
+def _clean_temp_dir():
+    for f in TEMP_DIR.iterdir():
+        try:
+            f.unlink()
+        except Exception:
+            pass
+
+_clean_temp_dir()
+atexit.register(_clean_temp_dir)
+
 _upload_state = {
     "running": False,
     "status": "",
     "logs": [],
     "result": None,
     "cancelled": False,
+    "progress": 0,
     "_uploader": None,
 }
 
 _scan_state = {
     "scanning": False,
+    "status": "",  # loading|waiting|scanned|confirming|logged_in|expired|timeout|error|cancelled
+    "qrcode": "",
     "result": None,
+    "cancelled": False,
+    "_page": None,
+    "_uploader": None,
 }
 
 _debug_mode = False
@@ -205,42 +222,134 @@ def api_login_account(name):
 
 @app.route("/api/accounts/add-with-scan", methods=["POST"])
 def api_add_account_with_scan():
-    """扫码添加账号：打开浏览器 → 用户扫码 → 自动抓取昵称 → 创建账号"""
+    """扫码添加账号：后台无头浏览器 → 截取二维码 → 前端展示 → 自动完成登录"""
     global _scan_state
 
     if _scan_state["scanning"]:
         return jsonify({"error": "已有扫码进行中"}), 409
 
     _scan_state["scanning"] = True
+    _scan_state["status"] = "loading"
+    _scan_state["qrcode"] = ""
     _scan_state["result"] = None
+    _scan_state["cancelled"] = False
+    _scan_state["_page"] = None
+    _scan_state["_uploader"] = None
 
     def do_scan():
         async def _scan():
             global _scan_state
             temp_name = f"scan_{datetime.now().strftime('%Y%m%d%H%M%S')}"
             profile_dir = account_mgr.ACCOUNTS_ROOT / temp_name / "profile"
-            uploader = WeChatUploader(profile_dir, headless=False)
+            uploader = WeChatUploader(profile_dir, headless=True)
+            _scan_state["_uploader"] = uploader
 
+            page = None
             try:
                 await uploader.start()
-                success = await uploader.ensure_login(timeout_seconds=180)
-                if not success:
-                    log.warning(f"扫码添加账号: 登录超时")
-                    _scan_state["scanning"] = False
-                    _scan_state["result"] = {"error": "登录超时"}
-                    await uploader.close()
-                    return
-
                 page = await uploader._context.new_page()
+                _scan_state["_page"] = page
+
                 await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=30000)
                 await page.wait_for_timeout(3000)
 
+                # 已有登录 session → 直接抓昵称创建账号
+                if await page.locator(".account-info").count() > 0:
+                    log.info("[QR] 已有登录 session，直接获取昵称")
+                    nickname = await uploader.scrape_nickname(page)
+                    safe_name = _sanitize_nickname(nickname)
+                    result = account_mgr.add_account(safe_name, nickname)
+                    account_mgr.update_last_login(safe_name)
+                    _scan_state["status"] = "logged_in"
+                    _scan_state["result"] = {
+                        "success": True,
+                        "account": result.get("account", {"name": safe_name, "nickname": nickname}),
+                    }
+                    _scan_state["scanning"] = False
+                    return
+
+                # 截取二维码（重试等待 iframe 加载）
+                qrcode = None
+                for attempt in range(10):
+                    try:
+                        qrcode = await uploader.capture_qrcode(page)
+                        break
+                    except Exception:
+                        await page.wait_for_timeout(1000)
+                if not qrcode:
+                    _scan_state["result"] = {"error": "无法获取二维码"}
+                    _scan_state["scanning"] = False
+                    return
+
+                _scan_state["qrcode"] = qrcode
+                _scan_state["status"] = "waiting"
+
+                # 轮询等待扫码（180s 超时，0.5s 间隔）
+                for i in range(360):
+                    # 检测取消
+                    if _scan_state["cancelled"]:
+                        log.info("[QR] 用户取消扫码")
+                        _scan_state["status"] = "cancelled"
+                        _scan_state["result"] = {"error": "用户取消"}
+                        _scan_state["scanning"] = False
+                        return
+
+                    # 检测登录成功
+                    if await page.locator(".account-info").count() > 0:
+                        log.info("[QR] 登录成功！")
+                        _scan_state["status"] = "logged_in"
+                        break
+
+                    # 检测二维码过期 → 刷新
+                    try:
+                        if await uploader.check_qrcode_expired(page):
+                            log.info("[QR] 二维码过期，刷新中...")
+                            _scan_state["status"] = "expired"
+                            await page.reload(wait_until="domcontentloaded")
+                            await page.wait_for_timeout(3000)
+                            for attempt2 in range(10):
+                                try:
+                                    qrcode = await uploader.capture_qrcode(page)
+                                    break
+                                except Exception:
+                                    await page.wait_for_timeout(1000)
+                            _scan_state["qrcode"] = qrcode
+                            _scan_state["status"] = "waiting"
+                            continue
+                    except Exception:
+                        pass
+
+                    # 检测扫码状态
+                    try:
+                        scan_status = await uploader.check_qrcode_scanned(page)
+                        if scan_status in ("scanned", "confirming"):
+                            _scan_state["status"] = scan_status
+                    except Exception:
+                        pass
+
+                    await asyncio.sleep(0.5)
+                else:
+                    _scan_state["status"] = "timeout"
+                    _scan_state["result"] = {"error": "登录超时"}
+                    _scan_state["scanning"] = False
+                    return
+
+                # 登录成功 → 抓昵称 → 创建账号 → 保留 session
                 nickname = await uploader.scrape_nickname(page)
-                await page.close()
+                await uploader.close()
+                _scan_state["_uploader"] = None
+                _scan_state["_page"] = None
 
                 safe_name = _sanitize_nickname(nickname)
                 result = account_mgr.add_account(safe_name, nickname)
                 account_mgr.update_last_login(safe_name)
+
+                # 将 temp profile 数据移到账号的真实 profile 目录（保留 session）
+                target_profile = Path(result["account"]["profile_dir"])
+                if target_profile.exists():
+                    shutil.rmtree(str(target_profile))
+                shutil.move(str(profile_dir), str(target_profile))
+                shutil.rmtree(str(profile_dir.parent), ignore_errors=True)
 
                 _scan_state["result"] = {
                     "success": True,
@@ -251,19 +360,43 @@ def api_add_account_with_scan():
                 _scan_state["result"] = {"error": str(e)}
             finally:
                 _scan_state["scanning"] = False
-                await uploader.close()
-                shutil.rmtree(profile_dir, ignore_errors=True)
+                if page:
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
+                if _scan_state["_uploader"]:
+                    try:
+                        await _scan_state["_uploader"].close()
+                    except Exception:
+                        pass
+                _scan_state["_uploader"] = None
+                _scan_state["_page"] = None
+                if profile_dir.exists():
+                    shutil.rmtree(str(profile_dir.parent), ignore_errors=True)
 
         asyncio.run(_scan())
 
     threading.Thread(target=do_scan, daemon=True).start()
-    return jsonify({"message": "网页打开中，请稍等"}), 202
+    return jsonify({"message": "正在获取二维码..."}), 202
 
+
+@app.route("/api/accounts/add-with-scan/cancel", methods=["POST"])
+def api_cancel_scan():
+    """取消当前扫码"""
+    global _scan_state
+    _scan_state["cancelled"] = True
+    return jsonify({"message": "已取消"})
 
 @app.route("/api/accounts/add-with-scan/status", methods=["GET"])
 def api_scan_status():
-    """查询扫码添加的状态"""
-    return jsonify(_scan_state)
+    """查询扫码添加的状态，返回二维码和状态"""
+    return jsonify({
+        "scanning": _scan_state["scanning"],
+        "status": _scan_state["status"],
+        "qrcode": _scan_state["qrcode"],
+        "result": _scan_state["result"],
+    })
 
 
 def _sanitize_nickname(nickname: str) -> str:
@@ -408,6 +541,7 @@ def api_start_upload():
         "logs": [],
         "result": None,
         "cancelled": False,
+        "progress": 0,
         "_uploader": None,
     }
 
@@ -416,49 +550,82 @@ def api_start_upload():
             global _upload_state
             uploader = WeChatUploader(profile_dir, headless=not _debug_mode)
             _upload_state["_uploader"] = uploader
-            await uploader.start()
+            try:
+                await uploader.start()
 
-            if not await uploader.ensure_login():
+                if _upload_state.get("cancelled"):
+                    _upload_state["running"] = False
+                    _upload_state["status"] = "已取消"
+                    return
+
+                if not await uploader.ensure_login():
+                    _upload_state["running"] = False
+                    _upload_state["status"] = "登录失败"
+                    _upload_state["logs"].append("登录失败，请先扫码登录")
+                    return
+
+                if _upload_state.get("cancelled"):
+                    _upload_state["running"] = False
+                    _upload_state["status"] = "已取消"
+                    return
+
+                _upload_state["status"] = "上传中..."
+                _upload_state["logs"].append(f"[开始] {title}")
+
+                # 后台协程：每500ms同步 WeChat 原生进度条到 _upload_state
+                _sync_done = False
+                async def _sync_progress():
+                    while not _sync_done:
+                        _upload_state["progress"] = uploader._upload_progress
+                        await asyncio.sleep(0.5)
+                sync_task = asyncio.ensure_future(_sync_progress())
+
+                result = await uploader.upload_single(
+
+                    video_path=video_path,
+                    title=title,
+                    description=description,
+                    cover_path=cover_path,
+                    short_drama_name=short_drama_name,
+                    publish_time=publish_time,
+                    location=location,
+                )
+                _sync_done = True
+                await sync_task
+                _upload_state["progress"] = 99
+                _upload_state["result"] = result
                 _upload_state["running"] = False
-                _upload_state["status"] = "登录失败"
-                _upload_state["logs"].append("登录失败，请先扫码登录")
+                if result["status"] == "published":
+                    _upload_state["status"] = "发表成功"
+                    _upload_state["logs"].append(f"[成功] {title}")
+                elif result["status"] == "failed":
+                    _upload_state["status"] = f"失败: {result.get('error', '')}"
+                    _upload_state["logs"].append(f"[失败] {title}: {result.get('error', '')}")
+                else:
+                    _upload_state["status"] = "发表状态不确定"
+                    _upload_state["logs"].append(f"[不确定] {title}")
+
+                _cleanup_temp_files(video_path)
+
+                # 保存结果
+                result_path = RESULTS_DIR / f"{account_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+                with open(result_path, "w", encoding="utf-8-sig", newline="") as f:
+                    w = csv.DictWriter(f, fieldnames=["video_path", "title", "status", "error"])
+                    w.writeheader()
+                    w.writerow(result)
+            except Exception as e:
+                _upload_state["running"] = False
+                _upload_state["status"] = f"异常: {e}"
+                _upload_state["logs"].append(f"[异常] {title}: {e}")
+                log.error(f"上传异常 [{title}]: {e}", exc_info=True)
+            finally:
+                try:
+                    _sync_done = True
+                    await sync_task
+                except Exception:
+                    pass
                 await uploader.close()
-                return
-
-            _upload_state["status"] = "上传中..."
-            _upload_state["logs"].append(f"[开始] {title}")
-
-            result = await uploader.upload_single(
-                video_path=video_path,
-                title=title,
-                description=description,
-                cover_path=cover_path,
-                short_drama_name=short_drama_name,
-                publish_time=publish_time,
-                location=location,
-            )
-            _upload_state["result"] = result
-            _upload_state["running"] = False
-            if result["status"] == "published":
-                _upload_state["status"] = "发表成功"
-                _upload_state["logs"].append(f"[成功] {title}")
-            elif result["status"] == "failed":
-                _upload_state["status"] = f"失败: {result.get('error', '')}"
-                _upload_state["logs"].append(f"[失败] {title}: {result.get('error', '')}")
-            else:
-                _upload_state["status"] = "发表状态不确定"
-                _upload_state["logs"].append(f"[不确定] {title}")
-
-            await uploader.close()
-
-            _cleanup_temp_files(video_path, cover_path)
-
-            # 保存结果
-            result_path = RESULTS_DIR / f"{account_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-            with open(result_path, "w", encoding="utf-8-sig", newline="") as f:
-                w = csv.DictWriter(f, fieldnames=["video_path", "title", "status", "error"])
-                w.writeheader()
-                w.writerow(result)
+                _upload_state["_uploader"] = None
 
         asyncio.run(_upload())
 
@@ -467,7 +634,14 @@ def api_start_upload():
 
 @app.route("/api/upload/status", methods=["GET"])
 def api_upload_status():
-    return jsonify(_upload_state)
+    return jsonify({
+        "running": _upload_state["running"],
+        "status": _upload_state["status"],
+        "logs": _upload_state["logs"][-20:],
+        "result": _upload_state["result"],
+        "cancelled": _upload_state["cancelled"],
+        "progress": _upload_state["progress"],
+    })
 
 @app.route("/api/upload/cancel", methods=["POST"])
 def api_cancel_upload():

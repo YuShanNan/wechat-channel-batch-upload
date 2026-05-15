@@ -155,6 +155,16 @@
   .debug-toggle:hover{color:#999}
   .debug-toggle.active{color:#07c160}
 
+  /* 二维码弹窗 */
+  .qrcode-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:102;align-items:center;justify-content:center}
+  .qrcode-overlay.show{display:flex}
+  .qrcode-modal{background:var(--card);border-radius:12px;padding:32px;text-align:center;max-width:360px;width:90%;position:relative}
+  #qrcode-img{width:220px;height:220px;border:1px solid var(--border);border-radius:8px;object-fit:contain}
+  .qrcode-status{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:16px;font-size:14px;color:#555}
+  .qrcode-spinner{width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite}
+  .qrcode-close{position:absolute;top:12px;right:12px;background:none;border:none;font-size:20px;color:var(--text2);cursor:pointer;line-height:1}
+  .qrcode-close:hover{color:var(--text)}
+
   @media(max-width:800px){.main{grid-template-columns:1fr}}
 </style>
 </head>
@@ -258,13 +268,29 @@
   </div>
 </div>
 
+<div class="qrcode-overlay" id="qrcode-overlay">
+  <div class="qrcode-modal">
+    <button class="qrcode-close" onclick="cancelScan()">✕</button>
+    <img id="qrcode-img" src="" alt="微信扫码登录" style="display:none">
+    <div class="qrcode-status">
+      <div class="qrcode-spinner" id="qrcode-spinner"></div>
+      <span id="qrcode-status-text">正在获取二维码...</span>
+    </div>
+    <button class="btn" style="background:var(--red);color:#fff;width:100%;margin-top:16px" onclick="cancelScan()">取消</button>
+  </div>
+</div>
+
 <div class="overlay" id="overlay">
   <div class="modal">
     <div class="spinner" id="spinner"></div>
     <div class="status-text" id="status-text">准备上传…</div>
-    <div class="progress-bar"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+    <div style="display:flex;align-items:center;gap:8px">
+      <div class="progress-bar" style="flex:1"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+      <span id="progress-pct" style="font-size:12px;color:var(--text2);min-width:36px;text-align:right">0%</span>
+    </div>
     <div class="progress-text" id="progress-text"></div>
     <div class="log-text" id="log-text"></div>
+    <button class="btn" style="background:var(--red);color:#fff;width:100%;margin-top:16px" onclick="cancelUpload()">取消上传</button>
   </div>
 </div>
 
@@ -308,7 +334,10 @@ function refreshAccountTable(){
     <td>${esc(a.nickname||'')}</td>
     <td>${esc(a.last_login||'未登录')}</td>
     <td><div class="acct-actions">
-      <button class="btn-sm btn-mgmt" onclick="loginAccount('${esc(a.name)}')">登录</button>
+      ${a.last_login
+        ? `<button class="btn-sm btn-mgmt" onclick="openDashboard('${esc(a.name)}')">后台</button>`
+        : `<button class="btn-sm btn-mgmt" onclick="loginAccount('${esc(a.name)}')">登录</button>`
+      }
       <button class="btn-sm" style="background:var(--red);color:#fff" onclick="deleteAccount('${esc(a.name)}')">删除</button>
     </div></td>
   </tr>`).join('');
@@ -324,31 +353,73 @@ function closeAccountManager(){
   document.getElementById('acct-overlay').classList.remove('show');
 }
 
+let qrcodeTimer=null;
+
+function openQrcodeModal(){
+  document.getElementById('qrcode-overlay').classList.add('show');
+  document.getElementById('qrcode-img').style.display='none';
+  document.getElementById('qrcode-spinner').style.display='';
+  document.getElementById('qrcode-status-text').textContent='正在获取二维码...';
+}
+
+function closeQrcodeModal(){
+  document.getElementById('qrcode-overlay').classList.remove('show');
+  if(qrcodeTimer){clearTimeout(qrcodeTimer);qrcodeTimer=null}
+}
+
+async function cancelScan(){
+  await fetch('/api/accounts/add-with-scan/cancel',{method:'POST'});
+  closeQrcodeModal();
+}
+
 async function addAccount(){
+  openQrcodeModal();
   const res=await fetch('/api/accounts/add-with-scan',{method:'POST'});
   const data=await res.json();
-  if(data.error){toast(data.error);return}
-  toast('网页打开中，请稍等');
-
-  let done=false;
-  for(let i=0;i<90;i++){
-    await new Promise(r=>setTimeout(r,2000));
-    const sr=await fetch('/api/accounts/add-with-scan/status');
-    const st=await sr.json();
-    if(!st.scanning){
-      done=true;
-      if(st.result&&st.result.success){
-        accounts.push(st.result.account);
-        refreshSelect();
-        refreshAccountTable();
-        toast('账号已添加: '+st.result.account.nickname);
-      }else{
-        toast('添加失败: '+(st.result?st.result.error:'未知错误'));
-      }
-      break;
-    }
+  if(data.error){
+    document.getElementById('qrcode-status-text').textContent=data.error;
+    setTimeout(closeQrcodeModal,2000);
+    return;
   }
-  if(!done)toast('添加超时，请重试');
+  pollQrcodeStatus();
+}
+
+const _qrcodeStatusMap={
+  loading:'正在获取二维码...',
+  waiting:'请使用微信扫描二维码',
+  scanned:'请使用微信扫描二维码',
+  confirming:'请使用微信扫描二维码',
+  expired:'二维码已过期，正在刷新...',
+  logged_in:'登录成功！',
+  timeout:'登录超时',
+  cancelled:'已取消',
+};
+
+async function pollQrcodeStatus(){
+  const sr=await fetch('/api/accounts/add-with-scan/status');
+  const st=await sr.json();
+  const img=document.getElementById('qrcode-img');
+  const spinner=document.getElementById('qrcode-spinner');
+  const statusText=document.getElementById('qrcode-status-text');
+
+  if(st.qrcode){
+    img.src=st.qrcode;
+    img.style.display='';
+    spinner.style.display='none';
+  }
+  statusText.textContent=_qrcodeStatusMap[st.status]||st.status;
+
+  if(!st.scanning){
+    spinner.style.display='none';
+    if(st.result&&st.result.success){
+      await reloadAccounts();
+      setTimeout(closeQrcodeModal,1500);
+    }else{
+      setTimeout(closeQrcodeModal,3000);
+    }
+    return;
+  }
+  qrcodeTimer=setTimeout(pollQrcodeStatus,1000);
 }
 
 async function deleteAccount(name){
@@ -356,6 +427,13 @@ async function deleteAccount(name){
   await fetch('/api/accounts/'+encodeURIComponent(name),{method:'DELETE'});
   await reloadAccounts();
   toast('已删除');
+}
+
+async function openDashboard(name){
+  const res=await fetch('/api/accounts/'+encodeURIComponent(name)+'/dashboard',{method:'POST'});
+  const data=await res.json();
+  if(data.error){toast(data.error);return}
+  toast('后台打开中');
 }
 
 async function loginAccount(name){
@@ -705,7 +783,6 @@ async function startUpload(){
   for(let i=0;i<videoQueue.length;i++){
     const v=videoQueue[i];
     document.getElementById('status-text').textContent=`上传中 (${i+1}/${videoQueue.length})`;
-    document.getElementById('progress-fill').style.width=Math.round(i/videoQueue.length*100)+'%';
     document.getElementById('progress-text').textContent=v.name;
 
     const res=await fetch('/api/upload',{method:'POST',headers:{'Content-Type':'application/json'},
@@ -713,9 +790,10 @@ async function startUpload(){
     const data=await res.json();
     if(data.error){v.status='fail';document.getElementById('log-text').textContent+=`\n[失败] ${v.name}`}
     else{
-      let done=false,st=null;
-      while(!done){await new Promise(r=>setTimeout(r,2000));const sr=await fetch('/api/upload/status');st=await sr.json();document.getElementById('status-text').textContent=st.status;done=!st.running}
-      v.status=st&&st.result&&st.result.status==='published'?'done':'fail';
+      let done=false,st=null,t0=Date.now();
+      while(!done){await new Promise(r=>setTimeout(r,2000));let sr;try{sr=await fetch('/api/upload/status');st=await sr.json()}catch(e){continue}document.getElementById('status-text').textContent=st.status;let pct=st.progress||0;if(Date.now()-t0>1000&&pct<1)pct=1;document.getElementById('progress-fill').style.width=pct+'%';document.getElementById('progress-pct').textContent=Math.round(pct)+'%';if(st.status==='已取消'||st.cancelled)break;done=!st.running}
+      if(st&&st.cancelled){document.getElementById('log-text').textContent+=`\n[取消] ${v.name}`;break}
+	      v.status=st&&st.result&&st.result.status==='published'?'done':'fail';
       document.getElementById('log-text').textContent+=`\n[${v.status==='done'?'成功':'失败'}] ${v.name}`;
     }
     updateQueueStatus(i);
@@ -729,6 +807,10 @@ async function startUpload(){
 }
 
 function toast(msg){const t=document.createElement('div');t.className='toast';t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),3000)}
+
+async function cancelUpload(){
+  await fetch('/api/upload/cancel',{method:'POST'});
+}
 
 let debugMode=false;
 async function toggleDebug(){
