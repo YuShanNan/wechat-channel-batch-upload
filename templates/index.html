@@ -306,13 +306,6 @@ async function loadAccounts(){
 }
 loadAccounts();
 
-async function reloadAccounts(){
-  const res=await fetch('/api/accounts'); const data=await res.json();
-  accounts=data.accounts||[];
-  refreshSelect();
-  refreshAccountTable();
-}
-
 function refreshSelect(){
   const sel=document.getElementById('account-select');
   const cur=sel.value;
@@ -412,7 +405,7 @@ async function pollQrcodeStatus(){
   if(!st.scanning){
     spinner.style.display='none';
     if(st.result&&st.result.success){
-      await reloadAccounts();
+      await loadAccounts();
       setTimeout(closeQrcodeModal,1500);
     }else{
       setTimeout(closeQrcodeModal,3000);
@@ -425,7 +418,7 @@ async function pollQrcodeStatus(){
 async function deleteAccount(name){
   if(!confirm(`确定删除账号 ${name}？此操作不删除浏览器数据。`))return;
   await fetch('/api/accounts/'+encodeURIComponent(name),{method:'DELETE'});
-  await reloadAccounts();
+  await loadAccounts();
   toast('已删除');
 }
 
@@ -444,7 +437,7 @@ async function loginAccount(name){
   let lastSeen=null;
   for(let i=0;i<60;i++){
     await new Promise(r=>setTimeout(r,3000));
-    await reloadAccounts();
+    await loadAccounts();
     const acct=accounts.find(a=>a.name===name);
     const cur=acct?acct.last_login:'';
     if(cur&&cur!==lastSeen){lastSeen=cur;refreshAccountTable()}

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import re
 import subprocess
 import sys
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
     from playwright.async_api import Page, BrowserContext, Frame
 
 CREATE_URL = "https://channels.weixin.qq.com/platform/post/create"
-
+_WIDTH_RE = re.compile(r"width:\s*([\d.]+)%")
 
 class WeChatUploader:
     """
@@ -172,7 +173,6 @@ class WeChatUploader:
         qr_area = frame.locator("img").first
         await qr_area.wait_for(state="visible", timeout=30000)
         screenshot = await qr_area.screenshot(type="png")
-        import base64
         return "data:image/png;base64," + base64.b64encode(screenshot).decode()
 
     async def check_qrcode_expired(self, page: Page) -> bool:
@@ -363,7 +363,7 @@ class WeChatUploader:
             try:
                 el = page.locator(".ant-progress-bg").first
                 style = await el.get_attribute("style") or ""
-                m = re.search(r"width:\s*([\d.]+)%", style)
+                m = _WIDTH_RE.search(style)
                 if m:
                     self._upload_progress = float(m.group(1))
             except Exception:

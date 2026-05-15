@@ -158,8 +158,8 @@ def api_check_accounts():
                     _check_state["results"][name] = valid
                 except Exception:
                     _check_state["results"][name] = False
-            if not _check_state["results"].get(name, True):
-                account_mgr.clear_last_login(name)
+                if not _check_state["results"][name]:
+                    account_mgr.clear_last_login(name)
             _check_state["checking"] = False
             _check_state["done"] = True
         asyncio.run(_check())
@@ -347,7 +347,7 @@ def api_add_account_with_scan():
                 # 将 temp profile 数据移到账号的真实 profile 目录（保留 session）
                 target_profile = Path(result["account"]["profile_dir"])
                 if target_profile.exists():
-                    shutil.rmtree(str(target_profile))
+                    shutil.rmtree(target_profile, ignore_errors=True)
                 shutil.move(str(profile_dir), str(target_profile))
                 shutil.rmtree(str(profile_dir.parent), ignore_errors=True)
 
@@ -534,7 +534,6 @@ def api_start_upload():
     if not profile_dir:
         return jsonify({"error": f"账号 {account_name} 不存在"}), 400
 
-    global _upload_state
     _upload_state = {
         "running": True,
         "status": "开始上传...",
@@ -576,7 +575,9 @@ def api_start_upload():
                 _sync_done = False
                 async def _sync_progress():
                     while not _sync_done:
-                        _upload_state["progress"] = uploader._upload_progress
+                        p = uploader._upload_progress
+                        if _upload_state["progress"] != p:
+                            _upload_state["progress"] = p
                         await asyncio.sleep(0.5)
                 sync_task = asyncio.ensure_future(_sync_progress())
 
