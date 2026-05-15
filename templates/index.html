@@ -105,8 +105,19 @@
   .radio-row label{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px}
   .radio-row input[type=radio]{accent-color:var(--green)}
 
-  .acct-select{padding:6px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px;outline:none;background:var(--card);width:100%}
-  .acct-select:focus{border-color:var(--green)}
+  .acct-select{display:none}
+  /* 自定义下拉 */
+  .cust-select{position:relative;flex:1}
+  .cust-trigger{display:flex;align-items:center;justify-content:space-between;padding:6px 10px 6px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px;font-family:inherit;background:var(--card);cursor:pointer;user-select:none;transition:border-color .2s;min-height:34px}
+  .cust-trigger:hover{border-color:var(--green)}
+  .cust-trigger.open{border-color:var(--green)}
+  .cust-trigger .cust-arrow{transition:transform .2s;color:var(--text2)}
+  .cust-trigger.open .cust-arrow{transform:rotate(180deg)}
+  .cust-dropdown{display:none;position:absolute;top:100%;left:0;right:0;margin-top:4px;background:var(--card);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.1);z-index:50;max-height:200px;overflow-y:auto}
+  .cust-dropdown.show{display:block}
+  .cust-option{padding:8px 12px;font-size:14px;font-family:inherit;cursor:pointer;transition:background .1s}
+  .cust-option:hover{background:#f0faf4}
+  .cust-option.selected{color:var(--green);font-weight:500}
 
   .btn{padding:10px 24px;border:none;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer;transition:all .15s;font-family:inherit}
   .btn:disabled{opacity:.5;cursor:not-allowed}
@@ -164,6 +175,16 @@
   .qrcode-spinner{width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite}
   .qrcode-close{position:absolute;top:12px;right:12px;background:none;border:none;font-size:20px;color:var(--text2);cursor:pointer;line-height:1}
   .qrcode-close:hover{color:var(--text)}
+
+  /* 表单统一 */
+  input[type="datetime-local"],input[type="number"]{padding:10px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px;font-family:inherit;outline:none;width:100%;transition:border-color .2s;background:var(--card);color:var(--text)}
+  input[type="datetime-local"]:focus,input[type="number"]:focus{border-color:var(--green)}
+  input[type="number"]::-webkit-outer-spin-button,input[type="number"]::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+  input[type="number"]{-moz-appearance:textfield}
+  /* 按钮变体 */
+  .btn-danger{background:var(--red);color:#fff}
+  .btn-danger:hover{background:#c0392b}
+  .btn-full{width:100%}
 
   @media(max-width:800px){.main{grid-template-columns:1fr}}
 </style>
@@ -230,18 +251,29 @@
           <input id="form-drama" placeholder="输入短剧名称">
         </div>
         <div class="form-group">
-          <label>定时发表</label>
+          <label>定时开始上传</label>
           <div class="radio-row">
             <label><input type="radio" name="schedule" value="now" checked onchange="toggleSchedule()">不定时</label>
             <label><input type="radio" name="schedule" value="scheduled" onchange="toggleSchedule()">定时</label>
           </div>
           <input type="datetime-local" id="form-time" style="display:none">
         </div>
+        <div class="form-group">
+          <label>发布间隔（分钟）</label>
+          <input type="number" id="form-interval" value="0" min="0" max="1440" placeholder="0 = 无间隔">
+        </div>
         <div style="font-size:13px;color:var(--text2)">位置: 不显示</div>
         <div class="form-group">
           <label>账号</label>
           <div class="acct-row">
             <select class="acct-select" id="account-select"><option value="">选择账号…</option></select>
+	            <div class="cust-select" id="account-select-wrap">
+	              <div class="cust-trigger" id="account-select-trigger" onclick="toggleCustSelect()">
+	                <span class="cust-text">选择账号…</span>
+	                <svg class="cust-arrow" width="12" height="12" viewBox="0 0 12 12"><path d="M3 5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
+	              </div>
+	              <div class="cust-dropdown" id="account-select-dropdown"></div>
+	            </div>
             <button class="btn-sm btn-mgmt" onclick="openAccountManager()">管理</button>
           </div>
         </div>
@@ -258,7 +290,7 @@
       <button class="modal-close" onclick="closeAccountManager()">✕</button>
     </div>
     <div class="acct-add-form">
-      <button class="btn-sm" style="background:var(--green);color:#fff;width:100%;padding:10px;font-size:14px" onclick="addAccount()">添加账号（扫码自动获取昵称）</button>
+      <button class="btn-sm btn-full" style="background:var(--green);color:#fff;padding:10px;font-size:14px" onclick="addAccount()">添加账号（扫码自动获取昵称）</button>
     </div>
     <table class="acct-table">
       <thead><tr><th>昵称</th><th>最后登录</th><th>操作</th></tr></thead>
@@ -276,7 +308,7 @@
       <div class="qrcode-spinner" id="qrcode-spinner"></div>
       <span id="qrcode-status-text">正在获取二维码...</span>
     </div>
-    <button class="btn" style="background:var(--red);color:#fff;width:100%;margin-top:16px" onclick="cancelScan()">取消</button>
+    <button class="btn btn-danger btn-full" style="margin-top:16px" onclick="cancelScan()">取消</button>
   </div>
 </div>
 
@@ -290,7 +322,7 @@
     </div>
     <div class="progress-text" id="progress-text"></div>
     <div class="log-text" id="log-text"></div>
-    <button class="btn" style="background:var(--red);color:#fff;width:100%;margin-top:16px" onclick="cancelUpload()">取消上传</button>
+    <button class="btn btn-danger btn-full" style="margin-top:16px" onclick="cancelUpload()">取消上传</button>
   </div>
 </div>
 
@@ -319,6 +351,7 @@ function refreshSelect(){
   sel.innerHTML='<option value="">选择账号…</option>'+
     accounts.map(a=>`<option value="${a.name}">${a.nickname||a.name}</option>`).join('');
   sel.value=accounts.some(a=>a.name===cur)?cur:'';
+  refreshCustSelect();
 }
 
 function refreshAccountTable(){
@@ -338,7 +371,7 @@ function refreshAccountTable(){
         ? `<button class="btn-sm btn-mgmt" onclick="openDashboard('${esc(a.name)}')">后台</button>`
         : `<button class="btn-sm btn-mgmt" onclick="loginAccount('${esc(a.name)}')">登录</button>`
       }
-      <button class="btn-sm" style="background:var(--red);color:#fff" onclick="deleteAccount('${esc(a.name)}')">删除</button>
+      <button class="btn-sm btn-danger" onclick="deleteAccount('${esc(a.name)}')">删除</button>
     </div></td>
   </tr>`).join('');
 }
@@ -764,6 +797,35 @@ function updateQueueStatus(i){
 // ==================== 定时 ====================
 function toggleSchedule(){document.getElementById('form-time').style.display=document.querySelector('input[name=schedule]:checked').value==='scheduled'?'block':'none'}
 
+// ==================== 自定义下拉 ====================
+function refreshCustSelect(){
+  const dropdown=document.getElementById('account-select-dropdown');
+  const sel=document.getElementById('account-select');
+  const cur=sel.value;
+  const options=Array.from(sel.options);
+  dropdown.innerHTML=options.map(o=>`<div class="cust-option${o.value===cur?' selected':''}" onclick="selectCustOption('${esc(o.value)}')">${o.text}</div>`).join('');
+  document.querySelector('.cust-text').textContent=options.find(o=>o.selected)?.text||'选择账号…';
+}
+function toggleCustSelect(){
+  const trigger=document.getElementById('account-select-trigger');
+  const dropdown=document.getElementById('account-select-dropdown');
+  const open=dropdown.classList.toggle('show');
+  trigger.classList.toggle('open',open);
+}
+function selectCustOption(val){
+  document.getElementById('account-select').value=val;
+  refreshCustSelect();
+  document.getElementById('account-select-trigger').classList.remove('open');
+  document.getElementById('account-select-dropdown').classList.remove('show');
+}
+document.addEventListener('click',e=>{
+  const wrap=document.getElementById('account-select-wrap');
+  if(wrap&&!wrap.contains(e.target)){
+    document.getElementById('account-select-trigger').classList.remove('open');
+    document.getElementById('account-select-dropdown').classList.remove('show');
+  }
+});
+
 // ==================== 发表 ====================
 async function startUpload(){
   const account=document.getElementById('account-select').value;
@@ -771,7 +833,8 @@ async function startUpload(){
   const desc=document.getElementById('form-desc').value.trim();
   const drama=document.getElementById('form-drama').value.trim();
   const sched=document.querySelector('input[name=schedule]:checked').value==='scheduled';
-  const ptime=sched?document.getElementById('form-time').value.replace('T',' '):'';
+  const startTimeVal=sched?document.getElementById('form-time').value:'';
+  const intervalMin=parseInt(document.getElementById('form-interval').value)||0;
 
   if(!account){toast('请选择账号');return}
   if(!videoQueue.length){toast('请添加视频');return}
@@ -780,13 +843,24 @@ async function startUpload(){
   document.getElementById('spinner').style.display='block';
   document.getElementById('log-text').textContent='';
 
+  // 本地定时等待
+  if(startTimeVal){
+    const target=new Date(startTimeVal).getTime();
+    const waitMs=target-Date.now();
+    if(waitMs>0){
+      document.getElementById('status-text').textContent='等待定时开始...';
+      document.getElementById('progress-pct').textContent='';
+      await new Promise(r=>setTimeout(r,waitMs));
+    }
+  }
+
   for(let i=0;i<videoQueue.length;i++){
     const v=videoQueue[i];
     document.getElementById('status-text').textContent=`上传中 (${i+1}/${videoQueue.length})`;
     document.getElementById('progress-text').textContent=v.name;
 
     const res=await fetch('/api/upload',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({account,video_path:v.path,title,description:desc,cover_path:currentCoverPath,short_drama_name:drama,publish_time:ptime,location:'none'})});
+      body:JSON.stringify({account,video_path:v.path,title,description:desc,cover_path:currentCoverPath,short_drama_name:drama,publish_time:'',location:'none'})});
     const data=await res.json();
     if(data.error){v.status='fail';document.getElementById('log-text').textContent+=`\n[失败] ${v.name}`}
     else{
@@ -797,7 +871,8 @@ async function startUpload(){
       document.getElementById('log-text').textContent+=`\n[${v.status==='done'?'成功':'失败'}] ${v.name}`;
     }
     updateQueueStatus(i);
-  }
+	    if(intervalMin>0&&i<videoQueue.length-1){document.getElementById('status-text').textContent=`等待间隔 ${intervalMin} 分钟...`;await new Promise(r=>setTimeout(r,intervalMin*60000))}
+	  }
   document.getElementById('progress-fill').style.width='100%';
   document.getElementById('status-text').textContent='全部完成';
   document.getElementById('spinner').style.display='none';
