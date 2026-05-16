@@ -9,6 +9,16 @@
     --green: #07c160; --green-hover: #06ad50; --red: #e74c3c;
     --bg: #f0f2f5; --card: #fff; --text: #1a1a1a; --text2: #888;
     --border: #e5e5e5; --shadow: 0 1px 3px rgba(0,0,0,.06); --radius: 8px;
+    --label: #555; --hover-bg: #f0faf4; --bar-track: #e9ecef;
+    --overlay-bg: rgba(0,0,0,.3); --badge-done-bg: #d4edda; --badge-done-text: #155724;
+    --badge-fail-bg: #f8d7da; --badge-fail-text: #721c24;
+  }
+  [data-theme="dark"] {
+    --bg: #1a1a1c; --card: #2a2a2d; --text: #e0e0e0; --text2: #999;
+    --border: #3a3a3d; --shadow: 0 1px 3px rgba(0,0,0,.4);
+    --label: #aaa; --hover-bg: #1a3a1a; --bar-track: #3a3a3d;
+    --overlay-bg: rgba(0,0,0,.6); --badge-done-bg: #1a3a1a; --badge-done-text: #7ddf90;
+    --badge-fail-bg: #3a1a1a; --badge-fail-text: #df7d7d;
   }
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
   html{font-size:15px}
@@ -17,7 +27,7 @@
   .main{max-width:1060px;margin:0 auto;padding:24px;display:grid;grid-template-columns:1fr 340px;gap:24px}
   .left,.right{display:flex;flex-direction:column;gap:16px}
   .card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px}
-  .card-title{font-size:13px;font-weight:500;color:#555;margin-bottom:8px}
+  .card-title{font-size:13px;font-weight:500;color:var(--label);margin-bottom:8px}
 
   /* 拖拽区 */
   .dropzone{
@@ -25,13 +35,13 @@
     padding:28px 16px;text-align:center;cursor:pointer;transition:all .2s;
     display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;
   }
-  .dropzone.dragover{border-color:var(--green);background:#f0faf4}
+  .dropzone.dragover{border-color:var(--green);background:var(--hover-bg)}
   .dropzone.has-file{border-style:solid;border-color:var(--green)}
   .dropzone .dz-icon{font-size:32px;color:var(--text2)}
   .dropzone .dz-title{font-size:14px;font-weight:500}
   .dropzone .dz-hint{font-size:11px;color:var(--text2)}
   .dropzone .dz-file{font-size:12px;color:var(--green);word-break:break-all}
-  .dropzone .dz-progress{height:4px;background:#e9ecef;border-radius:2px;margin-top:8px;width:100%;overflow:hidden}
+  .dropzone .dz-progress{height:4px;background:var(--bar-track);border-radius:2px;margin-top:8px;width:100%;overflow:hidden}
   .dropzone .dz-progress-fill{height:100%;background:var(--green);border-radius:2px;transition:width .2s}
 
   /* 封面 */
@@ -40,10 +50,10 @@
     padding:20px 16px;text-align:center;cursor:pointer;transition:all .2s;
     min-height:100px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;
   }
-  .cover-drop.dragover{border-color:var(--green);background:#f0faf4}
+  .cover-drop.dragover{border-color:var(--green);background:var(--hover-bg)}
   .cover-drop.has-file{border-style:solid;border-color:var(--green)}
   .cover-drop .cv-label{font-size:12px;color:var(--text2)}
-  .cover-drop .cv-ratio{font-size:11px;color:#bbb}
+  .cover-drop .cv-ratio{font-size:11px;color:var(--text2)}
   .cover-drop .cv-file{font-size:11px;color:var(--green);word-break:break-all}
   .cover-drop img.cover-thumb{max-width:100%;height:auto;border-radius:6px}
 
@@ -83,8 +93,8 @@
     position:absolute;top:2px;left:2px;
     padding:1px 6px;border-radius:8px;font-size:10px;font-weight:600;
   }
-  .queue-card .qc-status.done{background:#d4edda;color:#155724}
-  .queue-card .qc-status.fail{background:#f8d7da;color:#721c24}
+  .queue-card .qc-status.done{background:var(--badge-done-bg);color:var(--badge-done-text)}
+  .queue-card .qc-status.fail{background:var(--badge-fail-bg);color:var(--badge-fail-text)}
   .qc-name{
     font-size:11px;color:var(--text2);text-align:center;
     white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
@@ -93,10 +103,11 @@
 
   /* 表单 */
   .form-group{display:flex;flex-direction:column;gap:4px}
-  .form-group label{font-size:13px;font-weight:500;color:#555}
+  .form-group label{font-size:13px;font-weight:500;color:var(--label)}
   .form-group input:not([type=radio]):not([type=checkbox]),.form-group textarea{
     padding:10px 12px;border:1px solid var(--border);border-radius:6px;
     font-size:14px;font-family:inherit;outline:none;width:100%;transition:border-color .2s;
+    background:var(--card);color:var(--text);
   }
   .form-group textarea{min-height:80px;resize:vertical}
   .form-group input:focus,.form-group textarea:focus{border-color:var(--green)}
@@ -116,7 +127,7 @@
   .cust-dropdown{display:none;position:absolute;top:100%;left:0;right:0;margin-top:4px;background:var(--card);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.1);z-index:50;max-height:200px;overflow-y:auto}
   .cust-dropdown.show{display:block}
   .cust-option{padding:8px 12px;font-size:14px;font-family:inherit;cursor:pointer;transition:background .1s}
-  .cust-option:hover{background:#f0faf4}
+  .cust-option:hover{background:var(--hover-bg)}
   .cust-option.selected{color:var(--green);font-weight:500}
 
   .btn{padding:10px 24px;border:none;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer;transition:all .15s;font-family:inherit}
@@ -125,13 +136,13 @@
   .btn-publish:hover:not(:disabled){background:var(--green-hover)}
 
   /* overlay */
-  .overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:100;align-items:center;justify-content:center}
+  .overlay{display:none;position:fixed;inset:0;background:var(--overlay-bg);z-index:100;align-items:center;justify-content:center}
   .overlay.show{display:flex}
   .overlay .modal{background:var(--card);border-radius:12px;padding:32px;text-align:center;max-width:400px;width:90%}
   .overlay .spinner{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 16px}
   @keyframes spin{to{transform:rotate(360deg)}}
-  .overlay .status-text{font-size:15px;color:#333}
-  .overlay .progress-bar{height:6px;background:#e9ecef;border-radius:3px;overflow:hidden;margin:8px 0}
+  .overlay .status-text{font-size:15px;color:var(--text)}
+  .overlay .progress-bar{height:6px;background:var(--bar-track);border-radius:3px;overflow:hidden;margin:8px 0}
   .overlay .progress-fill{height:100%;background:var(--green);border-radius:3px;transition:width .3s}
   .overlay .progress-text{font-size:12px;color:var(--text2)}
   .overlay .log-text{font-size:12px;color:var(--text2);margin-top:8px;white-space:pre-wrap}
@@ -143,9 +154,9 @@
   .acct-row{display:flex;gap:6px}
   .acct-row .acct-select{flex:1}
   .btn-sm{padding:6px 12px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;font-family:inherit;transition:all .15s}
-  .btn-mgmt{background:var(--border);color:#555;white-space:nowrap}
-  .btn-mgmt:hover{background:#d5d5d5}
-  .acct-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:101;align-items:center;justify-content:center}
+  .btn-mgmt{background:var(--border);color:var(--label);white-space:nowrap}
+  .btn-mgmt:hover{background:var(--border)}
+  .acct-overlay{display:none;position:fixed;inset:0;background:var(--overlay-bg);z-index:101;align-items:center;justify-content:center}
   .acct-overlay.show{display:flex}
   .acct-overlay .modal{background:var(--card);border-radius:12px;padding:28px;max-width:520px;width:90%;max-height:80vh;overflow-y:auto}
   .acct-overlay .modal-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
@@ -162,16 +173,16 @@
   .acct-table .acct-actions{display:flex;gap:6px}
   .acct-empty{padding:24px;text-align:center;color:var(--text2);font-size:13px}
 
-  .debug-toggle{position:fixed;left:8px;bottom:8px;font-size:10px;color:#ccc;cursor:pointer;user-select:none;z-index:200;transition:color .2s}
-  .debug-toggle:hover{color:#999}
-  .debug-toggle.active{color:#07c160}
+  .debug-toggle{position:fixed;left:8px;bottom:8px;font-size:10px;color:var(--text2);cursor:pointer;user-select:none;z-index:200;transition:color .2s}
+  .debug-toggle:hover{color:var(--label)}
+  .debug-toggle.active{color:var(--green)}
 
   /* 二维码弹窗 */
-  .qrcode-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.3);z-index:102;align-items:center;justify-content:center}
+  .qrcode-overlay{display:none;position:fixed;inset:0;background:var(--overlay-bg);z-index:102;align-items:center;justify-content:center}
   .qrcode-overlay.show{display:flex}
   .qrcode-modal{background:var(--card);border-radius:12px;padding:32px;text-align:center;max-width:360px;width:90%;position:relative}
   #qrcode-img{width:220px;height:220px;border:1px solid var(--border);border-radius:8px;object-fit:contain}
-  .qrcode-status{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:16px;font-size:14px;color:#555}
+  .qrcode-status{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:16px;font-size:14px;color:var(--label)}
   .qrcode-spinner{width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite}
   .qrcode-close{position:absolute;top:12px;right:12px;background:none;border:none;font-size:20px;color:var(--text2);cursor:pointer;line-height:1}
   .qrcode-close:hover{color:var(--text)}
@@ -186,10 +197,15 @@
   .btn-danger:hover{background:#c0392b}
   .btn-full{width:100%}
 
+  .theme-toggle{position:fixed;top:12px;right:12px;background:none;border:1px solid var(--border);border-radius:6px;font-size:14px;padding:4px 8px;cursor:pointer;color:var(--text);z-index:200;font-family:inherit;transition:all .15s}
+  .theme-toggle:hover{background:var(--hover-bg)}
+
   @media(max-width:800px){.main{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
+
+<button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="切换暗色模式">🌙</button>
 
 <div class="main">
   <div class="left">
@@ -895,6 +911,22 @@ async function toggleDebug(){
   if(debugMode)el.classList.add('active');
   el.textContent=debugMode?'debug on':'debug';
 })();
+// ==================== 暗色模式 ====================
+(function initTheme(){
+  const saved=localStorage.getItem('theme');
+  const prefers=window.matchMedia('(prefers-color-scheme:dark)').matches;
+  if(saved==='dark'||(!saved&&prefers))document.documentElement.setAttribute('data-theme','dark');
+  updateThemeIcon();
+})();
+function toggleTheme(){
+  const el=document.documentElement;
+  if(el.hasAttribute('data-theme')){el.removeAttribute('data-theme');localStorage.setItem('theme','light')}
+  else{el.setAttribute('data-theme','dark');localStorage.setItem('theme','dark')}
+  updateThemeIcon();
+}
+function updateThemeIcon(){
+  document.getElementById('theme-toggle').textContent=document.documentElement.hasAttribute('data-theme')?'☀️':'🌙';
+}
 </script>
 <div class="debug-toggle" id="debug-toggle" onclick="toggleDebug()" title="切换有头/无头浏览器">debug</div>
 </body>

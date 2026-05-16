@@ -28,22 +28,6 @@ log = get_logger("server")
 app = Flask(__name__)
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 
-VIDEO_DIRS = []
-
-def _get_default_browse_dirs() -> list:
-    home = Path.home()
-    dirs = []
-    for name in ["Desktop", "Videos", "Documents"]:
-        p = home / name
-        if p.exists():
-            dirs.append(str(p))
-    for letter in "DEFGHIJK":
-        p = Path(f"{letter}:\\")
-        if p.exists():
-            dirs.append(str(p))
-    return dirs
-MEDIA_EXTS = {".mp4", ".mov", ".avi", ".mkv", ".jpg", ".jpeg", ".png", ".webp"}
-
 _BASE_DIR = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
 
 RESULTS_DIR = _BASE_DIR / "data" / "results"
@@ -107,18 +91,6 @@ def api_debug_set():
 @app.route("/api/accounts", methods=["GET"])
 def api_list_accounts():
     return jsonify({"accounts": account_mgr.list_accounts()})
-
-@app.route("/api/accounts", methods=["POST"])
-def api_add_account():
-    data = request.get_json()
-    name = data.get("name", "").strip()
-    nickname = data.get("nickname", "").strip()
-    if not name:
-        return jsonify({"error": "账号名称不能为空"}), 400
-    result = account_mgr.add_account(name, nickname)
-    if "error" in result:
-        return jsonify(result), 400
-    return jsonify(result)
 
 @app.route("/api/accounts/<name>", methods=["DELETE"])
 def api_remove_account(name):
@@ -406,50 +378,6 @@ def _sanitize_nickname(nickname: str) -> str:
     return cleaned[:30]
 
 
-# ==================== 文件浏览 API ====================
-
-@app.route("/api/browse")
-def api_browse():
-    """浏览视频目录，返回文件列表"""
-    dir_path = request.args.get("dir", "").strip()
-    if not dir_path:
-        sources = VIDEO_DIRS if VIDEO_DIRS else _get_default_browse_dirs()
-        result = []
-        for d in sources:
-            p = Path(d)
-            if p.exists():
-                result.append({
-                    "path": str(p),
-                    "name": p.name,
-                    "type": "dir",
-                })
-        return jsonify({"files": result, "parent": None})
-
-    target = Path(dir_path)
-    if not target.exists():
-        return jsonify({"error": "目录不存在"}), 404
-
-    result = []
-    try:
-        for item in sorted(target.iterdir()):
-            if item.name.startswith("."):
-                continue
-            is_dir = item.is_dir()
-            if not is_dir and item.suffix.lower() not in MEDIA_EXTS:
-                continue
-            result.append({
-                "path": str(item),
-                "name": item.name,
-                "type": "dir" if is_dir else item.suffix.lower(),
-                "size": item.stat().st_size if not is_dir else 0,
-            })
-    except PermissionError:
-        return jsonify({"error": "无权限访问"}), 403
-
-    parent = str(target.parent) if str(target) != target.drive else None
-    return jsonify({"files": result, "parent": parent})
-
-
 @app.route("/api/preview/<path:filepath>")
 def api_preview(filepath):
     """预览媒体文件（返回文件内容）"""
@@ -459,37 +387,6 @@ def api_preview(filepath):
     mime, _ = mimetypes.guess_type(str(f))
     return send_file(str(f), mimetype=mime or "application/octet-stream")
 
-
-@app.route("/api/finder")
-def api_finder():
-    """文件查找器：搜索匹配的视频/图片"""
-    q = request.args.get("q", "").strip().lower()
-    if not q or len(q) < 2:
-        return jsonify({"files": []})
-
-    results = []
-    sources = VIDEO_DIRS if VIDEO_DIRS else _get_default_browse_dirs()
-    for root_dir in sources:
-        root = Path(root_dir)
-        if not root.exists():
-            continue
-        for item in root.rglob("*"):
-            if item.name.startswith("."):
-                continue
-            if item.suffix.lower() not in MEDIA_EXTS:
-                continue
-            if q in item.name.lower():
-                results.append({
-                    "path": str(item),
-                    "name": item.name,
-                    "type": item.suffix.lower(),
-                })
-            if len(results) >= 20:
-                break
-        if len(results) >= 20:
-            break
-
-    return jsonify({"files": results})
 
 # ==================== 临时文件上传 ====================
 
@@ -593,7 +490,7 @@ def api_start_upload():
                 )
                 _sync_done = True
                 await sync_task
-                _upload_state["progress"] = 99
+                _upload_state["progress"] = 100
                 _upload_state["result"] = result
                 _upload_state["running"] = False
                 if result["status"] == "published":
@@ -680,12 +577,8 @@ def main():
     parser = argparse.ArgumentParser(description="视频号批量上传 Web 面板")
     parser.add_argument("--port", type=int, default=5050, help="端口 (默认 5050)")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--dirs", nargs="*", help="额外视频目录（空格分隔）")
     parser.add_argument("--debug", action="store_true")
     args = parser.parse_args()
-
-    if args.dirs:
-        VIDEO_DIRS.extend(args.dirs)
 
     log.info(f"视频号上传面板: http://{args.host}:{args.port}")
     app.run(host=args.host, port=args.port, debug=args.debug)

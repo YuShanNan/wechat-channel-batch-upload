@@ -192,40 +192,6 @@ class WeChatUploader:
             return "scanned"
         return "waiting"
 
-    async def wait_for_scan(self, page: Page, timeout_seconds: int = 180) -> str:
-        """
-        等待用户扫码登录。
-        返回 'logged_in' 表示登录成功，'expired' 表示二维码过期需刷新。
-        """
-        log.info(f"[QR] 等待扫码登录（{timeout_seconds}秒超时）...")
-        for i in range(timeout_seconds * 2):
-            # 优先检测登录成功
-            if await page.locator(".account-info").count() > 0:
-                log.info("[QR] 登录成功！")
-                return "logged_in"
-
-            # 检测二维码过期
-            try:
-                if await self.check_qrcode_expired(page):
-                    log.info("[QR] 二维码已过期")
-                    return "expired"
-            except Exception:
-                pass  # iframe 可能暂时不可用
-
-            # 检测扫码状态
-            try:
-                status = await self.check_qrcode_scanned(page)
-                if status == "scanned" and i % 20 == 0:
-                    log.info("[QR] 用户已扫码，等待确认...")
-                elif status == "confirming" and i % 20 == 0:
-                    log.info("[QR] 用户已扫码确认，等待登录...")
-            except Exception:
-                pass
-
-            await page.wait_for_timeout(500)
-        log.warning("[QR] 扫码等待超时")
-        return "timeout"
-
     # ==================== 上传 ====================
 
     async def upload_single(
@@ -357,7 +323,7 @@ class WeChatUploader:
             cls = await publish_btn.get_attribute("class") or ""
             if "weui-desktop-btn_disabled" not in cls:
                 log.info("上传完成，发表按钮已启用")
-                self._upload_progress = 99
+                self._upload_progress = 100
                 return
             # 读取 WeChat 原生进度条
             try:
