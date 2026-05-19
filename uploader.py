@@ -249,8 +249,15 @@ class WeChatUploader:
             await title_box.wait_for(state="visible", timeout=60000)
             await page.wait_for_timeout(2000)
 
-            # 2. 上传视频文件
-            log.info("[1/7] 上传视频文件...")
+            # 2. 优先选择短剧链接（必须完全匹配，否则直接失败）
+            if short_drama_name:
+                log.info(f"[剧名匹配] 搜索短剧: {short_drama_name}")
+                await self._select_short_drama(page, short_drama_name)
+            else:
+                log.info("[剧名匹配] 跳过短剧链接")
+
+            # 3. 上传视频文件
+            log.info("[1/6] 上传视频文件...")
             # 无头模式下 ant-upload 的隐藏 input 可能不挂载，改用 file chooser 机制
             async with page.expect_file_chooser() as fc_info:
                 # 点击上传拖拽区触发文件选择器
@@ -264,35 +271,28 @@ class WeChatUploader:
             await self._wait_for_upload_complete(page)
             log.info("上传完成")
 
-            # 3. 设置封面
+            # 4. 设置封面
             await self._set_cover(page, cover_path, video_path)
 
-            # 4. 填写短标题
-            log.info(f"[3/7] 填写标题: {title}")
+            # 5. 填写短标题
+            log.info(f"[2/6] 填写标题: {title}")
             await title_box.fill(title)
 
-            # 5. 填写描述
+            # 6. 填写描述
             if description:
-                log.info(f"[4/7] 填写描述...")
+                log.info(f"[3/6] 填写描述...")
                 await self._fill_description(page, description)
 
-            # 6. 设置位置为"不显示"
-            log.info(f"[5/7] 设置位置...")
+            # 7. 设置位置为"不显示"
+            log.info(f"[4/6] 设置位置...")
             await self._set_location_none(page)
-
-            # 7. 选择短剧链接
-            if short_drama_name:
-                log.info(f"[6/7] 选择短剧: {short_drama_name}")
-                await self._select_short_drama(page, short_drama_name)
-            else:
-                log.info("[6/7] 跳过短剧链接")
 
             # 8. 定时发表 / 立即发表
             if publish_time:
-                log.info(f"[7/7] 设置定时发表: {publish_time}")
+                log.info(f"[5/6] 设置定时发表: {publish_time}")
                 await self._set_scheduled_time(page, publish_time)
 
-            log.info(f"[7/7] 点击发表...")
+            log.info(f"[6/6] 点击发表...")
             await self._click_publish(page)
 
             # 验证发布结果
@@ -450,12 +450,11 @@ class WeChatUploader:
                 pass
 
     async def _select_short_drama(self, page: Page, drama_name: str):
-        """选择短剧链接"""
+        """选择短剧链接，必须完全匹配剧名，否则抛出异常"""
         # 点击"选择链接"
         select_link = page.get_by_text("选择链接")
         if await select_link.count() == 0:
-            log.info("未找到选择链接按钮")
-            return
+            raise RuntimeError("未找到选择链接按钮")
 
         await select_link.first.click()
         await page.wait_for_timeout(500)
@@ -466,11 +465,9 @@ class WeChatUploader:
             await drama_tab.wait_for(state="visible", timeout=5000)
             await drama_tab.click()
         except Exception:
-            log.info("未找到视频号剧集标签")
-            await page.keyboard.press("Escape")
-            return
+            raise RuntimeError("未找到视频号剧集标签")
 
-        # 点击选择器打开搜索弹窗（WeChat 可能用"添加"或"关联"）
+        # 点击选择器打开搜索弹窗
         drama_selector = page.get_by_text("选择需要添加的视频号剧集")
         if await drama_selector.count() == 0:
             drama_selector = page.get_by_text("选择需要关联的视频号剧集")
@@ -478,9 +475,9 @@ class WeChatUploader:
             if await drama_selector.count() > 0:
                 await drama_selector.click()
         except Exception:
-            pass  # 可能已经打开了，继续搜索
+            pass
 
-        # 搜索短剧 — 找到可见的剧集搜索框（有同名隐藏输入框在 display:none 面板中）
+        # 搜索短剧 — 找到可见的剧集搜索框
         all_inputs = page.locator('input[placeholder="搜索内容"]')
         search_box = None
         for j in range(await all_inputs.count()):
@@ -489,16 +486,13 @@ class WeChatUploader:
                 search_box = inp
                 break
         if not search_box:
-            log.info("未找到可见的搜索框")
-            await page.keyboard.press("Escape")
-            return
+            raise RuntimeError("未找到搜索框")
+
         try:
-            # 逐字输入触发 Vue 的 input 事件和防抖搜索
             await search_box.click()
             await search_box.fill("")
             await page.keyboard.type(drama_name, delay=80)
             await page.keyboard.press("Enter")
-            # 等待加载指示器消失
             try:
                 await page.locator(".common-table-loading").wait_for(state="visible", timeout=2000)
                 await page.locator(".common-table-loading").wait_for(state="hidden", timeout=5000)
@@ -506,44 +500,29 @@ class WeChatUploader:
                 pass
             await page.wait_for_timeout(1000)
         except Exception:
-            log.info("搜索框输入失败")
-            await page.keyboard.press("Escape")
-            return
+            raise RuntimeError("搜索框输入失败")
 
-        # 等待搜索结果并点击。drama-row 在滚动容器内，Playwright 可能判定不可达
-        clicked = False
+        # 在结果中查找完全匹配的剧名
         try:
-            row = page.locator(".drama-row").first
-            await row.wait_for(state="attached", timeout=8000)
-            # 用 JS 直接点击，绕过 Playwright 可见性检查
-            await row.evaluate("el => el.click()")
-            await page.wait_for_timeout(500)
-            clicked = True
-        except Exception as e:
-            log.warning(f"点击drama-row失败: {e}")
-        if not clicked:
-            try:
-                await page.get_by_text(drama_name, exact=False).first.click(force=True, timeout=3000)
-                clicked = True
-            except Exception:
-                pass
+            await page.locator(".drama-row").first.wait_for(state="attached", timeout=8000)
+        except Exception:
+            raise RuntimeError(f"未找到短剧: {drama_name}")
 
-        if clicked:
-            log.info(f"已选择短剧: {drama_name}")
-        else:
-            log.warning(f"未找到短剧: {drama_name}")
-            # 诊断：打印搜索框值和可见的表格行
-            try:
-                val = await search_box.input_value()
-                rows = await page.locator(".drama-row").count()
-                all_rows = await page.locator("tr").count()
-                tbody = await page.locator(".ant-table-tbody").count()
-                log.warning(f"搜索框值={val}, drama-row数={rows}, tr总数={all_rows}, tbody数={tbody}")
-                await page.screenshot(path="debug_drama_search.png")
-            except Exception:
-                pass
-            await page.keyboard.press("Escape")
-            await page.wait_for_timeout(300)
+        rows = page.locator(".drama-row")
+        row_count = await rows.count()
+        matched_row = None
+        for i in range(row_count):
+            text = (await rows.nth(i).text_content() or "").strip()
+            if text == drama_name:
+                matched_row = rows.nth(i)
+                break
+
+        if matched_row is None:
+            raise RuntimeError(f"未找到完全匹配的短剧: {drama_name}")
+
+        await matched_row.evaluate("el => el.click()")
+        await page.wait_for_timeout(500)
+        log.info(f"已选择短剧: {drama_name}")
 
     async def _set_scheduled_time(self, page: Page, time_str: str):
         """设置定时发表时间"""
