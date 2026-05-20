@@ -26,6 +26,33 @@ if TYPE_CHECKING:
 CREATE_URL = "https://channels.weixin.qq.com/platform/post/create"
 _WIDTH_RE = re.compile(r"width:\s*([\d.]+)%")
 
+SEL_ACCOUNT_INFO = ".account-info"
+SEL_ACCOUNT_NAME = ".account-info .name"
+SEL_UPLOAD_ZONE = ".ant-upload-btn"
+SEL_PUBLISH_BTN = "发表"
+SEL_DRAMA_ROW = ".drama-row"
+SEL_DRAMA_SEARCH_INPUT = 'input[placeholder="搜索内容"]'
+SEL_DRAMA_TAB = "视频号剧集"
+SEL_DRAMA_LINK_BTN = "选择链接"
+SEL_TITLE_PLACEHOLDER = "概括视频主要内容"
+SEL_TITLE_FALLBACK = 'input[placeholder^="概括"]'
+SEL_DESC_EDITOR = ".input-editor"
+SEL_PROGRESS_BG = ".ant-progress-bg"
+SEL_LOADING = ".common-table-loading"
+SEL_QRCODE_LOGIN = "text=微信扫码登录"
+SEL_QRCODE_EXPIRED = 'text=二维码已过期'
+SEL_QRCODE_CONFIRM = 'text=需在手机上进行确认'
+SEL_QRCODE_SCANNED = 'text=已扫码'
+SEL_EDIT_BTN = "编辑"
+SEL_CONFIRM_BTN = "确认"
+SEL_CANCEL_BTN = "取消"
+SEL_UPLOAD_COVER = "上传封面"
+SEL_FILE_INPUT = 'input[type=file]'
+SEL_POSITION_DISPLAY = ".position-display-wrap"
+SEL_NO_LOCATION = "不显示位置"
+SEL_SCHEDULED_RADIO = "定时"
+SEL_DATETIME_INPUT = 'input[type="datetime-local"]'
+
 class WeChatUploader:
     """
     视频号上传器
@@ -79,8 +106,8 @@ class WeChatUploader:
                     shutil.rmtree(p, ignore_errors=True)
                 elif p.exists():
                     p.unlink()
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"非关键操作失败: {e}")
 
     async def close(self):
         if not self._context:
@@ -90,16 +117,16 @@ class WeChatUploader:
         try:
             await self._context.close()
             log.info("浏览器已关闭 (context)")
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"非关键操作失败: {e}")
         # 2. 备用：browser.close() 直接终止进程
         browser = self._context.browser if self._context else None
         if browser:
             try:
                 await browser.close()
                 log.info("浏览器已关闭 (browser)")
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"非关键操作失败: {e}")
         self._context = None
         # 3. 兜底：系统级杀死该 profile 的 Chrome 进程
         self._kill_chrome_process()
@@ -116,24 +143,26 @@ class WeChatUploader:
         try:
             subprocess.run(cmd, capture_output=True, timeout=10,
                          creationflags=0x08000000)
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"非关键操作失败: {e}")
 
     async def ensure_login(self, timeout_seconds: int = 120) -> bool:
         """确保已登录。返回 True 表示已登录。"""
         page = await self._context.new_page()
         await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=30000)
-        await page.wait_for_timeout(5000)
 
-        # 正向检测：已登录时页面左侧有 .account-info，避免 URL 重定向延迟导致的误判
-        if await page.locator(".account-info").count() > 0:
+        # 等待已登录标识出现，避免固定延时
+        try:
+            await page.locator(SEL_ACCOUNT_INFO).wait_for(state="attached", timeout=15000)
             log.info("[登录] 已登录")
             await page.close()
             return True
+        except Exception:
+            pass
 
         log.info(f"[登录] 请在浏览器中扫码登录（{timeout_seconds}秒超时）...")
         for i in range(timeout_seconds):
-            if await page.locator(".account-info").count() > 0:
+            if await page.locator(SEL_ACCOUNT_INFO).count() > 0:
                 log.info("[登录] 扫码成功！")
                 await page.close()
                 return True
@@ -150,7 +179,7 @@ class WeChatUploader:
         从登录后的页面抓取当前用户的视频号昵称。
         昵称位于左侧边栏 .account-info .name 元素中。
         """
-        el = page.locator(".account-info .name").first
+        el = page.locator(SEL_ACCOUNT_NAME).first
         if await el.count() > 0:
             text = (await el.text_content()).strip()
             if text:
@@ -162,7 +191,7 @@ class WeChatUploader:
     async def _find_qrcode_frame(self, page: Page) -> "Frame":
         """找到包含二维码的最内层 iframe（reverse 从内到外）"""
         for frame in reversed(page.frames):
-            if await frame.locator('text=微信扫码登录').count() > 0:
+            if await frame.locator(SEL_QRCODE_LOGIN).count() > 0:
                 return frame
         raise RuntimeError("未找到二维码 iframe")
 
@@ -178,7 +207,7 @@ class WeChatUploader:
     async def check_qrcode_expired(self, page: Page) -> bool:
         """检测二维码是否已过期（仅匹配可见元素）"""
         frame = await self._find_qrcode_frame(page)
-        expired = frame.locator('text=二维码已过期').locator(':visible')
+        expired = frame.locator(SEL_QRCODE_EXPIRED).locator(':visible')
         if await expired.count() > 0:
             return True
         return False
@@ -186,9 +215,9 @@ class WeChatUploader:
     async def check_qrcode_scanned(self, page: Page) -> str:
         """检测二维码扫描状态，返回 'waiting'|'scanned'|'confirming'"""
         frame = await self._find_qrcode_frame(page)
-        if await frame.locator('text=需在手机上进行确认').locator(':visible').count() > 0:
+        if await frame.locator(SEL_QRCODE_CONFIRM).locator(':visible').count() > 0:
             return "confirming"
-        if await frame.locator('text=已扫码').locator(':visible').count() > 0:
+        if await frame.locator(SEL_QRCODE_SCANNED).locator(':visible').count() > 0:
             return "scanned"
         return "waiting"
 
@@ -240,10 +269,10 @@ class WeChatUploader:
                 return result
             # 等待表单渲染——标题输入框出现即表示页面就绪
             # 等待视频标题输入框可见（避免匹配到隐藏的合集标题框）
-            title_box = page.get_by_role("textbox", name="概括视频主要内容")
+            title_box = page.get_by_role("textbox", name=SEL_TITLE_PLACEHOLDER)
             # 容错：如果 WeChat 改了 placeholder，回退到 CSS 选择器
             if await title_box.count() == 0:
-                title_box = page.locator('input[placeholder^="概括"]').first
+                title_box = page.locator(SEL_TITLE_FALLBACK).first
                 if await title_box.count() == 0:
                     title_box = page.get_by_role("textbox").first
             await title_box.wait_for(state="visible", timeout=60000)
@@ -256,12 +285,12 @@ class WeChatUploader:
             else:
                 log.info("[剧名匹配] 跳过短剧链接")
 
-            # 3. 上传视频文件
-            log.info("[1/6] 上传视频文件...")
+            # 上传视频文件
+            log.info("上传视频文件...")
             # 无头模式下 ant-upload 的隐藏 input 可能不挂载，改用 file chooser 机制
             async with page.expect_file_chooser() as fc_info:
                 # 点击上传拖拽区触发文件选择器
-                upload_zone = page.locator(".ant-upload-btn").first
+                upload_zone = page.locator(SEL_UPLOAD_ZONE).first
                 await upload_zone.click()
                 await page.wait_for_timeout(500)
             file_chooser = await fc_info.value
@@ -271,28 +300,28 @@ class WeChatUploader:
             await self._wait_for_upload_complete(page)
             log.info("上传完成")
 
-            # 4. 设置封面
+            # 设置封面
             await self._set_cover(page, cover_path, video_path)
 
-            # 5. 填写短标题
-            log.info(f"[2/6] 填写标题: {title}")
+            # 填写短标题
+            log.info(f"填写标题: {title}")
             await title_box.fill(title)
 
-            # 6. 填写描述
+            # 填写描述
             if description:
-                log.info(f"[3/6] 填写描述...")
+                log.info("填写描述...")
                 await self._fill_description(page, description)
 
-            # 7. 设置位置为"不显示"
-            log.info(f"[4/6] 设置位置...")
+            # 设置位置为"不显示"
+            log.info("设置位置...")
             await self._set_location_none(page)
 
-            # 8. 定时发表 / 立即发表
+            # 定时发表 / 立即发表
             if publish_time:
-                log.info(f"[5/6] 设置定时发表: {publish_time}")
+                log.info(f"设置定时发表: {publish_time}")
                 await self._set_scheduled_time(page, publish_time)
 
-            log.info(f"[6/6] 点击发表...")
+            log.info("点击发表...")
             await self._click_publish(page)
 
             # 验证发布结果
@@ -318,7 +347,7 @@ class WeChatUploader:
     async def _wait_for_upload_complete(self, page: Page, timeout_ms: int = 600000):
         """等待视频上传完成——发表按钮 class 中 weui-desktop-btn_disabled 消失即为上传完成"""
         log.info("等待上传完成...")
-        publish_btn = page.get_by_role("button", name="发表")
+        publish_btn = page.get_by_role("button", name=SEL_PUBLISH_BTN)
         for i in range(timeout_ms // 500):
             cls = await publish_btn.get_attribute("class") or ""
             if "weui-desktop-btn_disabled" not in cls:
@@ -327,19 +356,19 @@ class WeChatUploader:
                 return
             # 读取 WeChat 原生进度条
             try:
-                el = page.locator(".ant-progress-bg").first
+                el = page.locator(SEL_PROGRESS_BG).first
                 style = await el.get_attribute("style") or ""
                 m = _WIDTH_RE.search(style)
                 if m:
                     self._upload_progress = float(m.group(1))
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"非关键操作失败: {e}")
             await page.wait_for_timeout(500)
         log.info("等待超时，发表按钮仍为禁用状态")
 
     async def _set_cover(self, page: Page, cover_path: str, video_path: str):
         """设置封面图片——个人主页卡片(3:4) + 分享卡片(4:3)"""
-        log.info("[2/7] 设置封面...")
+        log.info("设置封面...")
 
         actual_cover = self._resolve_cover_path(cover_path, video_path)
         if not actual_cover:
@@ -347,7 +376,7 @@ class WeChatUploader:
             return
 
         # 获取所有封面"编辑"按钮：第一个=个人主页卡片(3:4)，第二个=分享卡片(4:3)
-        edit_btns = page.get_by_text("编辑", exact=True)
+        edit_btns = page.get_by_text(SEL_EDIT_BTN, exact=True)
         edit_count = await edit_btns.count()
         if edit_count == 0:
             log.info("未找到封面编辑按钮，跳过")
@@ -364,13 +393,13 @@ class WeChatUploader:
                 await self._upload_cover_in_dialog(page, actual_cover)
 
                 # 确认（force=true 穿透遮罩层如 .setting-cover-mask）
-                confirm_btn = page.get_by_role("button", name="确认")
+                confirm_btn = page.get_by_role("button", name=SEL_CONFIRM_BTN)
                 if await confirm_btn.count() > 0:
                     await confirm_btn.click(force=True, timeout=5000)
                     await page.wait_for_timeout(1000)
                     log.info(f"{label} 封面已设置")
                 else:
-                    cancel_btn = page.get_by_role("button", name="取消")
+                    cancel_btn = page.get_by_role("button", name=SEL_CANCEL_BTN)
                     if await cancel_btn.count() > 0:
                         await cancel_btn.click()
                         await page.wait_for_timeout(500)
@@ -380,16 +409,17 @@ class WeChatUploader:
     async def _upload_cover_in_dialog(self, page: Page, image_path: str):
         """在封面编辑弹窗中上传图片（不可见时跳过，封面可能已存在）"""
         # 点击"上传封面"（可能不可见，如封面已自动生成）
-        upload_text = page.get_by_text("上传封面")
+        upload_text = page.get_by_text(SEL_UPLOAD_COVER)
         if await upload_text.count() > 0:
             try:
                 await upload_text.first.click(timeout=3000)
                 await page.wait_for_timeout(500)
-            except Exception:
+            except Exception as e:
+                log.debug(f"非关键操作失败: {e}")
                 return  # "上传封面"不可见，封面已自动设置，跳过
 
         # 找弹窗内的 file input 上传
-        file_inputs = page.locator("input[type=file]")
+        file_inputs = page.locator(SEL_FILE_INPUT)
         fi_count = await file_inputs.count()
         if fi_count >= 2:
             await file_inputs.nth(fi_count - 1).set_input_files(image_path)
@@ -412,7 +442,7 @@ class WeChatUploader:
 
     async def _fill_description(self, page: Page, description: str):
         """填写视频描述 (contenteditable div)"""
-        editor = page.locator(".input-editor")
+        editor = page.locator(SEL_DESC_EDITOR)
         try:
             await editor.wait_for(state="visible", timeout=5000)
             await editor.click()
@@ -428,7 +458,7 @@ class WeChatUploader:
             # 1. 点击位置行内的城市名，打开位置搜索面板
             # HTML: .form-item > .label(位置) + .form-item-body > .post-position-wrap > .position-display > .position-display-wrap
             form_item = page.locator(".form-item", has=page.get_by_text("位置", exact=True))
-            clickable = form_item.locator(".position-display-wrap")
+            clickable = form_item.locator(SEL_POSITION_DISPLAY)
             await clickable.click()
             await page.wait_for_timeout(500)
         except Exception as e:
@@ -437,7 +467,7 @@ class WeChatUploader:
 
         # 2. 在弹出面板中点击"不显示位置"
         try:
-            no_show = page.get_by_text("不显示位置", exact=True)
+            no_show = page.get_by_text(SEL_NO_LOCATION, exact=True)
             await no_show.wait_for(state="visible", timeout=5000)
             await no_show.click()
             await page.wait_for_timeout(500)
@@ -446,13 +476,13 @@ class WeChatUploader:
             log.info(f"不显示位置选项点击失败: {e}")
             try:
                 await page.keyboard.press("Escape")
-            except Exception:
-                pass
+            except Exception as e:
+                log.debug(f"非关键操作失败: {e}")
 
     async def _select_short_drama(self, page: Page, drama_name: str):
         """选择短剧链接，必须完全匹配剧名，否则抛出异常"""
         # 点击"选择链接"
-        select_link = page.get_by_text("选择链接")
+        select_link = page.get_by_text(SEL_DRAMA_LINK_BTN)
         if await select_link.count() == 0:
             raise RuntimeError("未找到选择链接按钮")
 
@@ -460,7 +490,7 @@ class WeChatUploader:
         await page.wait_for_timeout(500)
 
         # 点击"视频号剧集"
-        drama_tab = page.get_by_text("视频号剧集", exact=True)
+        drama_tab = page.get_by_text(SEL_DRAMA_TAB, exact=True)
         try:
             await drama_tab.wait_for(state="visible", timeout=5000)
             await drama_tab.click()
@@ -478,7 +508,7 @@ class WeChatUploader:
             pass
 
         # 搜索短剧 — 找到可见的剧集搜索框
-        all_inputs = page.locator('input[placeholder="搜索内容"]')
+        all_inputs = page.locator(SEL_DRAMA_SEARCH_INPUT)
         search_box = None
         for j in range(await all_inputs.count()):
             inp = all_inputs.nth(j)
@@ -494,21 +524,21 @@ class WeChatUploader:
             await page.keyboard.type(drama_name, delay=80)
             await page.keyboard.press("Enter")
             try:
-                await page.locator(".common-table-loading").wait_for(state="visible", timeout=2000)
-                await page.locator(".common-table-loading").wait_for(state="hidden", timeout=5000)
-            except Exception:
-                pass
+                await page.locator(SEL_LOADING).wait_for(state="visible", timeout=2000)
+                await page.locator(SEL_LOADING).wait_for(state="hidden", timeout=5000)
+            except Exception as e:
+                log.debug(f"非关键操作失败: {e}")
             await page.wait_for_timeout(1000)
         except Exception:
             raise RuntimeError("搜索框输入失败")
 
         # 在结果中查找完全匹配的剧名
         try:
-            await page.locator(".drama-row").first.wait_for(state="attached", timeout=8000)
+            await page.locator(SEL_DRAMA_ROW).first.wait_for(state="attached", timeout=8000)
         except Exception:
             raise RuntimeError(f"未找到短剧: {drama_name}")
 
-        rows = page.locator(".drama-row")
+        rows = page.locator(SEL_DRAMA_ROW)
         row_count = await rows.count()
         matched_row = None
         for i in range(row_count):
@@ -527,7 +557,7 @@ class WeChatUploader:
     async def _set_scheduled_time(self, page: Page, time_str: str):
         """设置定时发表时间"""
         # 点击"定时" radio
-        scheduled_radio = page.get_by_role("radio", name="定时")
+        scheduled_radio = page.get_by_role("radio", name=SEL_SCHEDULED_RADIO)
         try:
             await scheduled_radio.click()
             await page.wait_for_timeout(500)
@@ -537,7 +567,7 @@ class WeChatUploader:
 
         # 找到时间输入框并填写
         # 寻找 datetime-local 或日期时间 input
-        datetime_inputs = page.locator('input[type="datetime-local"]')
+        datetime_inputs = page.locator(SEL_DATETIME_INPUT)
         if await datetime_inputs.count() > 0:
             # 转换时间格式 "2026-04-28 10:30" → "2026-04-28T10:30"
             formatted = time_str.replace(" ", "T")
@@ -546,7 +576,7 @@ class WeChatUploader:
 
     async def _click_publish(self, page: Page):
         """点击发表按钮"""
-        publish_btn = page.get_by_role("button", name="发表")
+        publish_btn = page.get_by_role("button", name=SEL_PUBLISH_BTN)
         await publish_btn.wait_for(state="visible", timeout=10000)
         await publish_btn.click()
 

@@ -20,7 +20,7 @@ from flask import Flask, render_template, request, jsonify, send_file, url_for
 import shutil
 
 import accounts as account_mgr
-from uploader import WeChatUploader, CREATE_URL
+from uploader import WeChatUploader, CREATE_URL, SEL_ACCOUNT_INFO
 from logger import get_logger
 
 log = get_logger("server")
@@ -34,6 +34,8 @@ RESULTS_DIR = _BASE_DIR / "data" / "results"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 TEMP_DIR = _BASE_DIR / "data" / "temp"
 TEMP_DIR.mkdir(parents=True, exist_ok=True)
+_ALLOWED_DIRS = (TEMP_DIR.resolve(), _BASE_DIR.resolve())
+MAX_UPLOAD_SIZE = 20 * 1024 * 1024 * 1024  # 20GB
 
 def _clean_temp_dir():
     for f in TEMP_DIR.iterdir():
@@ -67,13 +69,40 @@ _scan_state = {
 
 _debug_mode = False
 
-# ==================== 页面 ====================
+# 持久化事件循环 + uploader 缓存，视频间复用浏览器会话
+_uploader_cache = {}
+_event_loop = None
+
+def _start_persistent_loop():
+    global _event_loop
+    loop = asyncio.new_event_loop()
+    _event_loop = loop
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+
+_event_loop_thread = threading.Thread(target=_start_persistent_loop, daemon=True)
+_event_loop_thread.start()
+
+def _close_uploader_safe(uploader):
+    """在持久化事件循环上安全关闭 uploader（fire-and-forget）"""
+    async def _close():
+        try:
+            await uploader.close()
+        except Exception as e:
+            log.debug(f"非关键操作失败: {e}")
+    if _event_loop and not _event_loop.is_closed():
+        asyncio.run_coroutine_threadsafe(_close(), _event_loop)
+
+def _cleanup_uploaders():
+    for _, u in _uploader_cache.items():
+        _close_uploader_safe(u)
+    _uploader_cache.clear()
+
+atexit.register(_cleanup_uploaders)
 
 @app.route("/")
 def index():
     return render_template("index.html")
-
-# ==================== Debug ====================
 
 @app.route("/api/debug", methods=["GET"])
 def api_debug_get():
@@ -86,8 +115,6 @@ def api_debug_set():
     _debug_mode = bool(data.get("debug", False))
     return jsonify({"debug": _debug_mode})
 
-# ==================== 账号 API ====================
-
 @app.route("/api/accounts", methods=["GET"])
 def api_list_accounts():
     return jsonify({"accounts": account_mgr.list_accounts()})
@@ -95,8 +122,6 @@ def api_list_accounts():
 @app.route("/api/accounts/<name>", methods=["DELETE"])
 def api_remove_account(name):
     return jsonify(account_mgr.remove_account(name))
-
-# ==================== 账号有效性检测 ====================
 
 _check_state = {"checking": False, "results": {}, "done": False}
 
@@ -190,8 +215,6 @@ def api_login_account(name):
     threading.Thread(target=do_login, daemon=True).start()
     return jsonify({"message": "网页打开中，请稍等"})
 
-# ==================== 扫码添加账号 API ====================
-
 @app.route("/api/accounts/add-with-scan", methods=["POST"])
 def api_add_account_with_scan():
     """扫码添加账号：后台无头浏览器 → 截取二维码 → 前端展示 → 自动完成登录"""
@@ -226,7 +249,7 @@ def api_add_account_with_scan():
                 await page.wait_for_timeout(3000)
 
                 # 已有登录 session → 直接抓昵称创建账号
-                if await page.locator(".account-info").count() > 0:
+                if await page.locator(SEL_ACCOUNT_INFO).count() > 0:
                     log.info("[QR] 已有登录 session，直接获取昵称")
                     nickname = await uploader.scrape_nickname(page)
                     safe_name = _sanitize_nickname(nickname)
@@ -267,7 +290,7 @@ def api_add_account_with_scan():
                         return
 
                     # 检测登录成功
-                    if await page.locator(".account-info").count() > 0:
+                    if await page.locator(SEL_ACCOUNT_INFO).count() > 0:
                         log.info("[QR] 登录成功！")
                         _scan_state["status"] = "logged_in"
                         break
@@ -381,29 +404,31 @@ def _sanitize_nickname(nickname: str) -> str:
 @app.route("/api/preview/<path:filepath>")
 def api_preview(filepath):
     """预览媒体文件（返回文件内容）"""
-    f = Path(filepath)
-    if not f.exists() or not f.is_file():
+    resolved = Path(filepath).resolve()
+    if not any(resolved.is_relative_to(d) for d in _ALLOWED_DIRS):
+        return "Forbidden", 403
+    if not resolved.is_file():
         return "Not found", 404
-    mime, _ = mimetypes.guess_type(str(f))
-    return send_file(str(f), mimetype=mime or "application/octet-stream")
+    mime, _ = mimetypes.guess_type(str(resolved))
+    return send_file(str(resolved), mimetype=mime or "application/octet-stream")
 
-
-# ==================== 临时文件上传 ====================
 
 @app.route("/api/upload-temp", methods=["POST"])
 def api_upload_temp():
     """接收浏览器上传的文件，存到临时目录，返回本地路径"""
     if "file" not in request.files:
         return jsonify({"error": "无文件"}), 400
+    content_length = request.content_length
+    if content_length and content_length > MAX_UPLOAD_SIZE:
+        return jsonify({"error": "文件过大，上限 20GB"}), 413
+
     f = request.files["file"]
     if not f.filename:
         return jsonify({"error": "空文件名"}), 400
-    # 保持原文件名，存入 temp 目录
-    dest = TEMP_DIR / f.filename
+    safe_name = Path(f.filename).name
+    dest = TEMP_DIR / safe_name
     f.save(str(dest))
     return jsonify({"path": str(dest), "name": f.filename})
-
-# ==================== 上传 API ====================
 
 @app.route("/api/upload", methods=["POST"])
 def api_start_upload():
@@ -419,6 +444,9 @@ def api_start_upload():
     short_drama_name = data.get("short_drama_name", "").strip()
     publish_time = data.get("publish_time", "").strip()
     location = data.get("location", "none")
+
+    if _upload_state.get("running"):
+        return jsonify({"error": "上传进行中"}), 409
 
     if not account_name:
         return jsonify({"error": "请选择账号"}), 400
@@ -439,14 +467,27 @@ def api_start_upload():
         "cancelled": False,
         "progress": 0,
         "_uploader": None,
+        "_account_name": account_name,
     }
 
-    def do_upload():
-        async def _upload():
-            global _upload_state
-            uploader = WeChatUploader(profile_dir, headless=not _debug_mode)
-            _upload_state["_uploader"] = uploader
-            try:
+    async def _upload():
+        global _upload_state
+        sync_task = None
+        _sync_done = False
+        uploader = None
+
+        try:
+            if account_name in _uploader_cache:
+                uploader = _uploader_cache[account_name]
+                log.info(f"[缓存] 复用账号 {account_name} 的浏览器会话")
+                if uploader._context is None:
+                    log.info("[缓存] 浏览器已关闭，重新创建")
+                    _uploader_cache.pop(account_name, None)
+                    uploader = None
+
+            if uploader is None:
+                uploader = WeChatUploader(profile_dir, headless=not _debug_mode)
+                _upload_state["_uploader"] = uploader
                 await uploader.start()
 
                 if _upload_state.get("cancelled"):
@@ -458,76 +499,94 @@ def api_start_upload():
                     _upload_state["running"] = False
                     _upload_state["status"] = "登录失败"
                     _upload_state["logs"].append("登录失败，请先扫码登录")
+                    await uploader.close()
                     return
 
-                if _upload_state.get("cancelled"):
-                    _upload_state["running"] = False
-                    _upload_state["status"] = "已取消"
-                    return
+                _uploader_cache[account_name] = uploader
+            else:
+                _upload_state["_uploader"] = uploader
 
-                _upload_state["status"] = "上传中..."
-                _upload_state["logs"].append(f"[开始] {title}")
-
-                # 后台协程：每500ms同步 WeChat 原生进度条到 _upload_state
-                _sync_done = False
-                async def _sync_progress():
-                    while not _sync_done:
-                        p = uploader._upload_progress
-                        if _upload_state["progress"] != p:
-                            _upload_state["progress"] = p
-                        await asyncio.sleep(0.5)
-                sync_task = asyncio.ensure_future(_sync_progress())
-
-                result = await uploader.upload_single(
-
-                    video_path=video_path,
-                    title=title,
-                    description=description,
-                    cover_path=cover_path,
-                    short_drama_name=short_drama_name,
-                    publish_time=publish_time,
-                    location=location,
-                )
-                _sync_done = True
-                await sync_task
-                _upload_state["progress"] = 100
-                _upload_state["result"] = result
-                _upload_state["running"] = False
-                if result["status"] == "published":
-                    _upload_state["status"] = "发表成功"
-                    _upload_state["logs"].append(f"[成功] {title}")
-                elif result["status"] == "failed":
-                    _upload_state["status"] = f"失败: {result.get('error', '')}"
-                    _upload_state["logs"].append(f"[失败] {title}: {result.get('error', '')}")
-                else:
-                    _upload_state["status"] = "发表状态不确定"
-                    _upload_state["logs"].append(f"[不确定] {title}")
-
-                _cleanup_temp_files(video_path)
-
-                # 保存结果
-                result_path = RESULTS_DIR / f"{account_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
-                with open(result_path, "w", encoding="utf-8-sig", newline="") as f:
-                    w = csv.DictWriter(f, fieldnames=["video_path", "title", "status", "error"])
-                    w.writeheader()
-                    w.writerow(result)
-            except Exception as e:
-                _upload_state["running"] = False
-                _upload_state["status"] = f"异常: {e}"
-                _upload_state["logs"].append(f"[异常] {title}: {e}")
-                log.error(f"上传异常 [{title}]: {e}", exc_info=True)
-            finally:
+            start_at = data.get("start_at", "").strip()
+            if start_at:
                 try:
-                    _sync_done = True
+                    target_dt = datetime.fromisoformat(start_at)
+                    wait_seconds = (target_dt - datetime.now()).total_seconds()
+                    if wait_seconds > 0:
+                        _upload_state["status"] = "等待定时开始..."
+                        log.info(f"[定时] 等待 {wait_seconds:.0f} 秒")
+                        await asyncio.sleep(wait_seconds)
+                except Exception as e:
+                    log.warning(f"[定时] 解析失败: {e}")
+
+            if _upload_state.get("cancelled"):
+                _upload_state["running"] = False
+                _upload_state["status"] = "已取消"
+                return
+
+            _upload_state["status"] = "上传中..."
+            _upload_state["logs"].append(f"[开始] {title}")
+
+            # 后台协程：每500ms同步 WeChat 原生进度条到 _upload_state
+            _sync_done = False
+            async def _sync_progress():
+                while not _sync_done:
+                    p = uploader._upload_progress
+                    if _upload_state["progress"] != p:
+                        _upload_state["progress"] = p
+                    await asyncio.sleep(0.5)
+            sync_task = asyncio.ensure_future(_sync_progress())
+
+            result = await uploader.upload_single(
+                video_path=video_path,
+                title=title,
+                description=description,
+                cover_path=cover_path,
+                short_drama_name=short_drama_name,
+                publish_time=publish_time,
+                location=location,
+            )
+            _upload_state["progress"] = 100
+            _upload_state["result"] = result
+            _upload_state["running"] = False
+            if result["status"] == "published":
+                _upload_state["status"] = "发表成功"
+                _upload_state["logs"].append(f"[成功] {title}")
+            elif result["status"] == "failed":
+                _upload_state["status"] = f"失败: {result.get('error', '')}"
+                _upload_state["logs"].append(f"[失败] {title}: {result.get('error', '')}")
+            else:
+                _upload_state["status"] = "发表状态不确定"
+                _upload_state["logs"].append(f"[不确定] {title}")
+
+            # 保存结果
+            result_path = RESULTS_DIR / f"{account_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            with open(result_path, "w", encoding="utf-8-sig", newline="") as f:
+                w = csv.DictWriter(f, fieldnames=["video_path", "title", "status", "error"])
+                w.writeheader()
+                w.writerow(result)
+        except Exception as e:
+            _upload_state["running"] = False
+            _upload_state["status"] = f"异常: {e}"
+            _upload_state["logs"].append(f"[异常] {title}: {e}")
+            log.error(f"上传异常 [{title}]: {e}", exc_info=True)
+        finally:
+            try:
+                _sync_done = True
+                if sync_task is not None:
                     await sync_task
-                except Exception:
-                    pass
-                await uploader.close()
-                _upload_state["_uploader"] = None
+            except Exception:
+                pass
 
-        asyncio.run(_upload())
+            if uploader is not None:
+                is_success = _upload_state.get("result", {}).get("status") == "published"
+                if is_success:
+                    log.info(f"[缓存] 保留账号 {account_name} 的浏览器会话")
+                else:
+                    _uploader_cache.pop(account_name, None)
+                    await uploader.close()
+                    _upload_state["_uploader"] = None
 
-    threading.Thread(target=do_upload, daemon=True).start()
+    asyncio.run_coroutine_threadsafe(_upload(), _event_loop)
     return jsonify({"message": "上传任务已启动"})
 
 @app.route("/api/upload/status", methods=["GET"])
@@ -547,30 +606,21 @@ def api_cancel_upload():
     global _upload_state
     log.info("收到取消上传请求")
     _upload_state["cancelled"] = True
-    uploader = _upload_state.get("_uploader")
+
+    account_name = _upload_state.get("_account_name")
+    uploader = _uploader_cache.pop(account_name, None) if account_name else None
     if uploader:
-        def do_close():
-            async def _close():
-                await uploader.close()
-            asyncio.run(_close())
-        threading.Thread(target=do_close, daemon=True).start()
-        log.info("已发起关闭浏览器")
+        _close_uploader_safe(uploader)
+        log.info(f"已关闭 {account_name} 的浏览器会话")
+    elif _upload_state.get("_uploader"):
+        _close_uploader_safe(_upload_state["_uploader"])
     else:
         log.warning("取消时无 uploader 引用")
+
     _upload_state["running"] = False
     _upload_state["status"] = "已取消"
+    _upload_state["_uploader"] = None
     return jsonify({"message": "已取消"})
-
-def _cleanup_temp_files(*paths: str):
-    """删除 TEMP_DIR 内的暂存文件"""
-    for p in paths:
-        if not p:
-            continue
-        fp = Path(p)
-        if fp.parent == TEMP_DIR and fp.exists():
-            fp.unlink(missing_ok=True)
-
-# ==================== 启动 ====================
 
 def main():
     import argparse

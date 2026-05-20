@@ -545,8 +545,9 @@ async function uploadFiles(files,type){
       }
     }
   }
-  // 全部上传完后一次性加入队列，重置拖拽区
+  // 全部上传完后一次性加入队列
   if(newVideos.length>0){
+    for(const v of videoQueue){if(v.status)v.status=''}
     videoQueue.push(...newVideos);
   }
   videoDz.classList.remove('has-file');
@@ -852,16 +853,7 @@ async function startUpload(){
   document.getElementById('spinner').style.display='block';
   document.getElementById('log-text').textContent='';
 
-  // 本地定时等待
-  if(startTimeVal){
-    const target=new Date(startTimeVal).getTime();
-    const waitMs=target-Date.now();
-    if(waitMs>0){
-      document.getElementById('status-text').textContent='等待定时开始...';
-      document.getElementById('progress-pct').textContent='';
-      await new Promise(r=>setTimeout(r,waitMs));
-    }
-  }
+  // 定时发表由后端处理
 
   for(let i=0;i<videoQueue.length;i++){
     const v=videoQueue[i];
@@ -869,12 +861,12 @@ async function startUpload(){
     document.getElementById('progress-text').textContent=v.name;
 
     const res=await fetch('/api/upload',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({account,video_path:v.path,title,description:desc,cover_path:currentCoverPath,short_drama_name:drama,publish_time:'',location:'none'})});
+      body:JSON.stringify({account,video_path:v.path,title,description:desc,cover_path:currentCoverPath,short_drama_name:drama,publish_time:'',location:'none',start_at:startTimeVal})});
     const data=await res.json();
     if(data.error){v.status='fail';document.getElementById('log-text').textContent+=`\n[失败] ${v.name}`}
     else{
       let done=false,st=null,t0=Date.now();
-      while(!done){await new Promise(r=>setTimeout(r,2000));let sr;try{sr=await fetch('/api/upload/status');st=await sr.json()}catch(e){continue}document.getElementById('status-text').textContent=st.status;let pct=st.progress||0;if(Date.now()-t0>1000&&pct<1)pct=1;document.getElementById('progress-fill').style.width=pct+'%';document.getElementById('progress-pct').textContent=Math.round(pct)+'%';if(st.status==='已取消'||st.cancelled)break;done=!st.running}
+      while(!done){await new Promise(r=>setTimeout(r,3000));let sr;try{sr=await fetch('/api/upload/status');st=await sr.json()}catch(e){continue}document.getElementById('status-text').textContent=st.status;let pct=st.progress||0;if(Date.now()-t0>1000&&pct<1)pct=1;document.getElementById('progress-fill').style.width=pct+'%';document.getElementById('progress-pct').textContent=Math.round(pct)+'%';if(st.status==='已取消'||st.cancelled)break;done=!st.running}
       if(st&&st.cancelled){document.getElementById('log-text').textContent+=`\n[取消] ${v.name}`;break}
 	      v.status=st&&st.result&&st.result.status==='published'?'done':'fail';
       document.getElementById('log-text').textContent+=`\n[${v.status==='done'?'成功':'失败'}] ${v.name}`;
@@ -885,8 +877,7 @@ async function startUpload(){
   document.getElementById('progress-fill').style.width='100%';
   document.getElementById('status-text').textContent='全部完成';
   document.getElementById('spinner').style.display='none';
-  videoDz.classList.remove('has-file');
-  videoDz.innerHTML='<div class="dz-icon">+</div><div class="dz-title">拖拽或点击选择视频</div><div class="dz-hint">MP4/H.264，不超过 20GB，支持多选</div>';
+  // 完成后保留队列，卡片徽章标示结果
   setTimeout(()=>overlay.classList.remove('show'),3000);
 }
 
