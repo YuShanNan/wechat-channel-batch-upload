@@ -19,4 +19,5 @@ data/accounts.json
 build/
 dist/
 *.spec
+.worktrees/
 data/test_*/
