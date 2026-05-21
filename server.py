@@ -2,6 +2,7 @@
 视频号批量上传 - 本地 Web 管理面板 v2
 Flask + 拖拽上传界面 + Playwright 后端
 """
+import os
 import sys
 import json
 import csv
@@ -47,15 +48,25 @@ def _clean_temp_dir():
 _clean_temp_dir()
 atexit.register(_clean_temp_dir)
 
-_upload_state = {
-    "running": False,
-    "status": "",
-    "logs": [],
-    "result": None,
-    "cancelled": False,
-    "progress": 0,
-    "_uploader": None,
-}
+_account_upload_state: dict[str, dict] = {}
+
+def _get_or_create_account_state(account_name: str) -> dict:
+    """Get or lazily initialize upload state for an account."""
+    if account_name not in _account_upload_state:
+        _account_upload_state[account_name] = {
+            "running": False,
+            "status": "",
+            "progress": 0,
+            "logs": [],
+            "result": None,
+            "cancelled": True,   # re-created as asyncio.Event when task starts
+            "skip_current": True,
+            "_task": None,
+            "_video_queue": [],
+            "_current_index": 0,
+            "_interval_min": 0,
+        }
+    return _account_upload_state[account_name]
 
 _scan_state = {
     "scanning": False,
@@ -71,6 +82,10 @@ _debug_mode = False
 
 # 持久化事件循环 + uploader 缓存，视频间复用浏览器会话
 _uploader_cache = {}
+_MAX_CONCURRENT = int(os.environ.get("WECHAT_MAX_CONCURRENT", "3"))
+_upload_semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
+_cooldown_timers: dict[str, asyncio.Task] = {}
+_COOLDOWN_SECONDS = 60
 _event_loop = None
 
 def _start_persistent_loop():
