@@ -42,8 +42,8 @@ def _clean_temp_dir():
     for f in TEMP_DIR.iterdir():
         try:
             f.unlink()
-        except Exception:
-            pass
+        except Exception as e:
+            log.debug(f"非关键操作失败: {e}")
 
 _clean_temp_dir()
 atexit.register(_clean_temp_dir)
@@ -67,6 +67,14 @@ def _get_or_create_account_state(account_name: str) -> dict:
             "_interval_min": 0,
         }
     return _account_upload_state[account_name]
+
+_MAX_LOG_LINES = 200
+
+def _add_log(account_name: str, msg: str):
+    state = _get_or_create_account_state(account_name)
+    state["logs"].append(msg)
+    if len(state["logs"]) > _MAX_LOG_LINES:
+        state["logs"] = state["logs"][-_MAX_LOG_LINES:]
 
 _scan_state = {
     "scanning": False,
@@ -163,7 +171,7 @@ async def _run_account_upload(account_name: str, profile_dir: Path, headless: bo
                     return
                 if not await uploader.ensure_login():
                     state["status"] = "登录失败"
-                    state["logs"].append("登录失败，请先扫码登录")
+                    _add_log(account_name, "登录失败，请先扫码登录")
                     await uploader.close()
                     state["running"] = False
                     return
@@ -184,7 +192,7 @@ async def _run_account_upload(account_name: str, profile_dir: Path, headless: bo
                 state["_current_index"] = i
                 title = video.get("title", "")
                 state["status"] = f"上传中 ({i+1}/{total})"
-                state["logs"].append(f"[开始] {title}")
+                _add_log(account_name, f"[开始] {title}")
 
                 result = await uploader.upload_single(
                     video_path=video["video_path"],
@@ -199,15 +207,15 @@ async def _run_account_upload(account_name: str, profile_dir: Path, headless: bo
                 if skip_ev.is_set():
                     skip_ev.clear()
                     state["_video_queue"][i]["_status"] = "skipped"
-                    state["logs"].append(f"[跳过] {title}")
+                    _add_log(account_name, f"[跳过] {title}")
                     state["progress"] = int((i + 1) / total * 100)
                     continue
 
                 state["_video_queue"][i]["_status"] = result.get("status", "unknown")
                 if result.get("status") == "published":
-                    state["logs"].append(f"[成功] {title}")
+                    _add_log(account_name, f"[成功] {title}")
                 else:
-                    state["logs"].append(f"[失败] {title}: {result.get('error', '')}")
+                    _add_log(account_name, f"[失败] {title}: {result.get('error', '')}")
                 state["progress"] = int((i + 1) / total * 100)
 
                 if interval > 0 and i < total - 1 and not cancel_ev.is_set():
@@ -220,7 +228,7 @@ async def _run_account_upload(account_name: str, profile_dir: Path, headless: bo
 
     except Exception as e:
         state["status"] = f"异常: {e}"
-        state["logs"].append(f"[异常] {e}")
+        _add_log(account_name, f"[异常] {e}")
         log.error(f"上传异常 [{account_name}]: {e}", exc_info=True)
     finally:
         state["running"] = False
@@ -292,7 +300,8 @@ def api_check_accounts():
                     valid = await uploader.ensure_login(timeout_seconds=30)
                     await uploader.close()
                     _check_state["results"][name] = valid
-                except Exception:
+                except Exception as e:
+                    log.debug(f"非关键操作失败: {e}")
                     _check_state["results"][name] = False
                 if not _check_state["results"][name]:
                     account_mgr.clear_last_login(name)
@@ -407,9 +416,8 @@ def api_account_upload_status(name):
             cancelled_is_set = True
         elif isinstance(ev, asyncio.Event):
             cancelled_is_set = ev.is_set()
-    except Exception:
-        pass
-    return jsonify({
+    except Exception as e:
+        log.debug(f"非关键操作失败: {e}")
         "running": state.get("running", False),
         "status": state.get("status", ""),
         "progress": state.get("progress", 0),
@@ -566,7 +574,8 @@ def api_add_account_with_scan():
                     try:
                         qrcode = await uploader.capture_qrcode(page)
                         break
-                    except Exception:
+                    except Exception as e:
+                        log.debug(f"非关键操作失败: {e}")
                         await page.wait_for_timeout(1000)
                 if not qrcode:
                     _scan_state["result"] = {"error": "无法获取二维码"}
@@ -603,12 +612,14 @@ def api_add_account_with_scan():
                                 try:
                                     qrcode = await uploader.capture_qrcode(page)
                                     break
-                                except Exception:
+                                except Exception as e:
+                                    log.debug(f"非关键操作失败: {e}")
                                     await page.wait_for_timeout(1000)
                             _scan_state["qrcode"] = qrcode
                             _scan_state["status"] = "waiting"
                             continue
-                    except Exception:
+                    except Exception as e:
+                        log.debug(f"非关键操作失败: {e}")
                         pass
 
                     # 检测扫码状态
@@ -616,7 +627,8 @@ def api_add_account_with_scan():
                         scan_status = await uploader.check_qrcode_scanned(page)
                         if scan_status in ("scanned", "confirming"):
                             _scan_state["status"] = scan_status
-                    except Exception:
+                    except Exception as e:
+                        log.debug(f"非关键操作失败: {e}")
                         pass
 
                     await asyncio.sleep(0.5)
@@ -655,12 +667,14 @@ def api_add_account_with_scan():
                 if page:
                     try:
                         await page.close()
-                    except Exception:
+                    except Exception as e:
+                        log.debug(f"非关键操作失败: {e}")
                         pass
                 if _scan_state["_uploader"]:
                     try:
                         await _scan_state["_uploader"].close()
-                    except Exception:
+                    except Exception as e:
+                        log.debug(f"非关键操作失败: {e}")
                         pass
                 _scan_state["_uploader"] = None
                 _scan_state["_page"] = None
