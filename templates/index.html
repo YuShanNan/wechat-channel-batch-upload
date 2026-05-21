@@ -255,66 +255,7 @@
     </div>
   </div>
 
-  <div class="right">
-    <!-- 封面 -->
-    <div class="card">
-      <div class="card-title">封面</div>
-      <div class="cover-drop" id="cover-dz">
-        <div class="cv-label">个人主页封面</div>
-        <div class="cv-ratio">3:4</div>
-      </div>
-      <input type="file" id="cover-input" accept="image/png,image/jpeg,image/webp" style="display:none">
-    </div>
-
-    <!-- 表单 -->
-    <div class="card" style="flex:1">
-      <div style="display:flex;flex-direction:column;gap:14px">
-        <div class="form-group">
-          <label>描述</label>
-          <textarea id="form-desc" placeholder="添加描述 #话题 &commat;视频号"></textarea>
-        </div>
-        <div class="form-group">
-          <label>短标题</label>
-          <input id="form-title" placeholder="概括视频主要内容，6-16字" maxlength="20">
-        </div>
-        <div class="form-group">
-          <label>短剧名称</label>
-          <input id="form-drama" placeholder="输入短剧名称">
-        </div>
-        <div class="form-group">
-          <label>定时开始上传</label>
-          <div class="radio-row">
-            <label><input type="radio" name="schedule" value="now" checked onchange="toggleSchedule()">不定时</label>
-            <label><input type="radio" name="schedule" value="scheduled" onchange="toggleSchedule()">定时</label>
-          </div>
-          <input type="datetime-local" id="form-time" style="display:none">
-        </div>
-        <div class="form-group">
-          <label>发布间隔（分钟）</label>
-          <input type="number" id="form-interval" value="0" min="0" max="1440" placeholder="0 = 无间隔">
-        </div>
-        <div style="font-size:13px;color:var(--text2)">位置: 不显示</div>
-        <div class="form-group">
-          <label>账号</label>
-          <div class="acct-row">
-            <select class="acct-select" id="account-select"><option value="">选择账号…</option></select>
-	            <div class="cust-select" id="account-select-wrap">
-	              <div class="cust-trigger" id="account-select-trigger" onclick="toggleCustSelect()">
-	                <span class="cust-text">选择账号…</span>
-	                <svg class="cust-arrow" width="12" height="12" viewBox="0 0 12 12"><path d="M3 5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
-	              </div>
-	              <div class="cust-dropdown" id="account-select-dropdown"></div>
-	            </div>
-            <button class="btn-sm btn-mgmt" onclick="openAccountManager()">管理</button>
-          </div>
-        </div>
-      </div>
-    </div>
-    <button class="btn btn-publish" id="btn-publish" onclick="startUpload()">发表</button>
-  </div>
-</div>
-
-<div class="acct-overlay" id="acct-overlay" onclick="closeAccountManager()">
+  <div class="acct-overlay" id="acct-overlay" onclick="closeAccountManager()">
   <div class="modal" onclick="event.stopPropagation()">
     <div class="modal-header">
       <h2>账号管理</h2>
