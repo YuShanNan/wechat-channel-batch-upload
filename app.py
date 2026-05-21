@@ -39,7 +39,7 @@ def main():
     wait_for_flask()
 
     import webview
-    webview.create_window("视频号上传", URL, width=1100, height=850, resizable=True)
+    webview.create_window("视频号上传", URL, width=1100, height=850, resizable=True, text_select=True)
     webview.start()
 
 
