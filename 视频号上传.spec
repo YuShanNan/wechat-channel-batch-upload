@@ -10,13 +10,12 @@ _ms_browsers = [
     (_msroot + '/winldd-1007', 'ms-playwright/winldd-1007'),
 ]
 
-_here = r'E:/project/wechat_chanel'
 a = Analysis(
-    [_os.path.join(_here, 'app.py')],
-    pathex=[_here],
+    [_os.path.join(SPECPATH, 'app.py')],
+    pathex=[SPECPATH],
     binaries=[],
     datas=[
-        ('templates', 'templates'),
+        (_os.path.join(SPECPATH, 'templates'), 'templates'),
     ] + _ms_browsers,
     hiddenimports=['accounts', 'uploader', 'logger', 'csv_generator'],
     hookspath=[],

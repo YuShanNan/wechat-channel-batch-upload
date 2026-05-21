@@ -30,12 +30,18 @@ def wait_for_flask():
 
 
 def main():
-    from server import app  # 延迟导入，窗口先出现
+    from web_server import app  # 延迟导入，窗口先出现
 
     if getattr(sys, 'frozen', False):
-        from jinja2 import FileSystemLoader
+        from flask import request as flask_request
         _tpl = Path(sys._MEIPASS) / "templates"
-        app.jinja_loader = FileSystemLoader(str(_tpl))
+        _index_html = (_tpl / "index.html").read_text(encoding="utf-8")
+
+        @app.before_request
+        def _serve_index():
+            if flask_request.path == "/":
+                return _index_html, 200, {"Content-Type": "text/html; charset=utf-8"}
+            return None
 
     def run_flask():
         app.run(host="127.0.0.1", port=PORT, debug=False)

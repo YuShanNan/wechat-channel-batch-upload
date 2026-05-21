@@ -29,11 +29,6 @@ app = Flask(__name__)
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 
 _BASE_DIR = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).parent
-if getattr(sys, 'frozen', False):
-    from jinja2 import FileSystemLoader
-    _tpl = _BASE_DIR / "templates"
-    app.jinja_loader = FileSystemLoader(str(_tpl))
-    log.info(f"frozen mode: _MEIPASS={_BASE_DIR}, templates={_tpl}")
 
 RESULTS_DIR = _BASE_DIR / "data" / "results"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -253,7 +248,6 @@ async def _run_account_upload(account_name: str, profile_dir: Path, headless: bo
 
 @app.route("/")
 def index():
-    # v2 marker: FileSystemLoader fix 2026-05-22
     return render_template("index.html")
 
 @app.route("/api/debug", methods=["GET"])
