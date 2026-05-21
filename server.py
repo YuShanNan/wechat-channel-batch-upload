@@ -30,7 +30,10 @@ app.config['TEMPLATES_AUTO_RELOAD'] = True
 
 _BASE_DIR = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).parent
 if getattr(sys, 'frozen', False):
-    app.template_folder = str(_BASE_DIR / "templates")
+    from jinja2 import FileSystemLoader
+    _tpl = _BASE_DIR / "templates"
+    app.jinja_loader = FileSystemLoader(str(_tpl))
+    log.info(f"frozen mode: _MEIPASS={_BASE_DIR}, templates={_tpl}")
 
 RESULTS_DIR = _BASE_DIR / "data" / "results"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
