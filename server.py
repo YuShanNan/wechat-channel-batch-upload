@@ -115,6 +115,127 @@ def _cleanup_uploaders():
 
 atexit.register(_cleanup_uploaders)
 
+async def _async_set_event(ev: asyncio.Event):
+    ev.set()
+
+async def _run_account_upload(account_name: str, profile_dir: Path, headless: bool):
+    """Process the full video queue for one account, respecting cancel/skip/semaphore."""
+    state = _get_or_create_account_state(account_name)
+    state["running"] = True
+    state["progress"] = 0
+    state["logs"] = []
+    cancel_ev = asyncio.Event()
+    skip_ev = asyncio.Event()
+    state["cancelled"] = cancel_ev
+    state["skip_current"] = skip_ev
+    state["status"] = "等待中..."
+
+    if not profile_dir.exists():
+        state["status"] = "账号 profile 目录不存在"
+        state["running"] = False
+        return
+
+    uploader = None
+    try:
+        async with _upload_semaphore:
+            if cancel_ev.is_set():
+                state["status"] = "已取消"
+                state["running"] = False
+                return
+
+            # --- session reuse or creation ---
+            if account_name in _uploader_cache:
+                uploader = _uploader_cache[account_name]
+                if uploader._context is None:
+                    _uploader_cache.pop(account_name, None)
+                    uploader = None
+
+            if uploader is None:
+                uploader = WeChatUploader(profile_dir, headless=headless)
+                await uploader.start()
+                if cancel_ev.is_set():
+                    await uploader.close()
+                    state["status"] = "已取消"
+                    state["running"] = False
+                    return
+                if not await uploader.ensure_login():
+                    state["status"] = "登录失败"
+                    state["logs"].append("登录失败，请先扫码登录")
+                    await uploader.close()
+                    state["running"] = False
+                    return
+                _uploader_cache[account_name] = uploader
+
+            # --- process queue ---
+            queue = state["_video_queue"]
+            total = len(queue)
+            interval = state.get("_interval_min", 0)
+
+            for i in range(total):
+                if cancel_ev.is_set():
+                    state["status"] = "已取消"
+                    break
+
+                # Re-read current item (queue may have been edited externally)
+                video = state["_video_queue"][i]
+                state["_current_index"] = i
+                title = video.get("title", "")
+                state["status"] = f"上传中 ({i+1}/{total})"
+                state["logs"].append(f"[开始] {title}")
+
+                result = await uploader.upload_single(
+                    video_path=video["video_path"],
+                    title=title,
+                    description=video.get("description", ""),
+                    cover_path=video.get("cover_path", ""),
+                    short_drama_name=video.get("short_drama_name", ""),
+                    publish_time=video.get("publish_time", ""),
+                    location=video.get("location", "none"),
+                )
+
+                if skip_ev.is_set():
+                    skip_ev.clear()
+                    state["_video_queue"][i]["_status"] = "skipped"
+                    state["logs"].append(f"[跳过] {title}")
+                    state["progress"] = int((i + 1) / total * 100)
+                    continue
+
+                state["_video_queue"][i]["_status"] = result.get("status", "unknown")
+                if result.get("status") == "published":
+                    state["logs"].append(f"[成功] {title}")
+                else:
+                    state["logs"].append(f"[失败] {title}: {result.get('error', '')}")
+                state["progress"] = int((i + 1) / total * 100)
+
+                if interval > 0 and i < total - 1 and not cancel_ev.is_set():
+                    state["status"] = f"等待间隔 {interval} 分钟..."
+                    await asyncio.sleep(interval * 60)
+
+            if not cancel_ev.is_set():
+                state["status"] = "全部完成"
+                state["progress"] = 100
+
+    except Exception as e:
+        state["status"] = f"异常: {e}"
+        state["logs"].append(f"[异常] {e}")
+        log.error(f"上传异常 [{account_name}]: {e}", exc_info=True)
+    finally:
+        state["running"] = False
+        state["_task"] = None
+        # Start cooldown timer: close browser after idle timeout
+        if uploader and account_name not in _cooldown_timers:
+            async def _cooldown():
+                await asyncio.sleep(_COOLDOWN_SECONDS)
+                if account_name in _cooldown_timers:
+                    del _cooldown_timers[account_name]
+                cached = _uploader_cache.pop(account_name, None)
+                if cached:
+                    await cached.close()
+                    log.info(f"[cooldown] 已关闭 {account_name} 浏览器会话")
+            loop = asyncio.get_event_loop()
+            t = loop.create_task(_cooldown())
+            _cooldown_timers[account_name] = t
+
 @app.route("/")
 def index():
     return render_template("index.html")
@@ -229,6 +350,48 @@ def api_login_account(name):
 
     threading.Thread(target=do_login, daemon=True).start()
     return jsonify({"message": "网页打开中，请稍等"})
+
+@app.route("/api/accounts/<name>/upload/start", methods=["POST"])
+def api_account_upload_start(name):
+    """Start batch upload for a specific account's queue."""
+    profile_dir = account_mgr.get_profile_dir(name)
+    if not profile_dir:
+        return jsonify({"error": f"账号 {name} 不存在"}), 404
+
+    state = _get_or_create_account_state(name)
+    if state["running"]:
+        return jsonify({"error": f"账号 {name} 正在上传中"}), 409
+
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "请求体为空"}), 400
+
+    videos = data.get("videos", [])
+    if not videos:
+        return jsonify({"error": "视频队列为空"}), 400
+
+    for v in videos:
+        if not Path(v.get("video_path", "")).exists():
+            return jsonify({"error": f"视频文件不存在: {v.get('video_path')}"}), 400
+
+    # Populate state
+    state["_video_queue"] = videos
+    state["_interval_min"] = data.get("interval_min", 0)
+    state["progress"] = 0
+    state["logs"] = []
+
+    # Cancel any cooldown timer
+    if name in _cooldown_timers:
+        _cooldown_timers[name].cancel()
+        del _cooldown_timers[name]
+
+    # Launch upload task on persistent event loop
+    headless = not _debug_mode
+    coro = _run_account_upload(name, Path(profile_dir), headless)
+    task = asyncio.run_coroutine_threadsafe(coro, _event_loop)
+    state["_task"] = task
+
+    return jsonify({"message": f"账号 {name} 上传已启动"})
 
 @app.route("/api/accounts/add-with-scan", methods=["POST"])
 def api_add_account_with_scan():
