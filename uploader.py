@@ -223,6 +223,11 @@ class WeChatUploader:
 
     # ==================== 上传 ====================
 
+    STATUS_PUBLISHED = "published"
+    STATUS_FAILED = "failed"
+    STATUS_UNKNOWN = "unknown"
+    STATUS_UNCERTAIN = "uncertain"
+
     async def upload_single(
         self,
         video_path: str,
@@ -232,7 +237,6 @@ class WeChatUploader:
         short_drama_name: str = "",
         publish_time: str = "",
         location: str = "none",
-        declared_original: bool = False,
     ) -> dict:
         """
         上传单个视频，返回结果字典 {status, title, error}
@@ -245,12 +249,11 @@ class WeChatUploader:
             short_drama_name: 短剧名称（用于搜索挂载链接）
             publish_time: 定时发布时间，格式 "2026-04-28 10:30"，空则立即发布
             location: 位置，"none" 表示不显示
-            declared_original: 是否声明原创
         """
         result = {
             "video_path": video_path,
             "title": title,
-            "status": "unknown",
+            "status": self.STATUS_UNKNOWN,
             "error": "",
         }
 
@@ -264,7 +267,7 @@ class WeChatUploader:
             # 先快速检查是否被重定向到登录页
             await page.wait_for_timeout(2000)
             if "login" in page.url:
-                result["status"] = "failed"
+                result["status"] = self.STATUS_FAILED
                 result["error"] = "未登录"
                 return result
             # 等待表单渲染——标题输入框出现即表示页面就绪
@@ -327,15 +330,15 @@ class WeChatUploader:
             # 验证发布结果
             publish_ok = await self._verify_publish(page)
             if publish_ok:
-                result["status"] = "published"
+                result["status"] = self.STATUS_PUBLISHED
                 log.info(f"发表成功: {title}")
             else:
-                result["status"] = "uncertain"
+                result["status"] = self.STATUS_UNCERTAIN
                 result["error"] = "未能确认发表状态"
                 log.warning(f"发表状态不确定: {title}")
 
         except Exception as e:
-            result["status"] = "failed"
+            result["status"] = self.STATUS_FAILED
             result["error"] = str(e)
             log.error(f"失败: {e}", exc_info=True)
 
@@ -532,27 +535,15 @@ class WeChatUploader:
         except Exception:
             raise RuntimeError("搜索框输入失败")
 
-        # 在结果中查找完全匹配的剧名
+        # 等待搜索结果出现，有结果则选第一个
         try:
-            await page.locator(SEL_DRAMA_ROW).first.wait_for(state="attached", timeout=8000)
+            first_row = page.locator(SEL_DRAMA_ROW).first
+            await first_row.wait_for(state="attached", timeout=8000)
+            await first_row.evaluate("el => el.click()")
+            await page.wait_for_timeout(500)
+            log.info(f"已选择短剧: {drama_name}")
         except Exception:
             raise RuntimeError(f"未找到短剧: {drama_name}")
-
-        rows = page.locator(SEL_DRAMA_ROW)
-        row_count = await rows.count()
-        matched_row = None
-        for i in range(row_count):
-            text = (await rows.nth(i).text_content() or "").strip()
-            if text == drama_name:
-                matched_row = rows.nth(i)
-                break
-
-        if matched_row is None:
-            raise RuntimeError(f"未找到完全匹配的短剧: {drama_name}")
-
-        await matched_row.evaluate("el => el.click()")
-        await page.wait_for_timeout(500)
-        log.info(f"已选择短剧: {drama_name}")
 
     async def _set_scheduled_time(self, page: Page, time_str: str):
         """设置定时发表时间"""
