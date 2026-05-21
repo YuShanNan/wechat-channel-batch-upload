@@ -7,12 +7,11 @@ from __future__ import annotations
 import asyncio
 import base64
 import re
+import shutil
 import subprocess
 import sys
-import os
 from logger import get_logger
 from pathlib import Path
-from datetime import datetime
 from typing import Optional, TYPE_CHECKING
 
 # Windows 控制台 UTF-8
@@ -102,7 +101,6 @@ class WeChatUploader:
             p = default / name
             try:
                 if p.is_dir():
-                    import shutil
                     shutil.rmtree(p, ignore_errors=True)
                 elif p.exists():
                     p.unlink()

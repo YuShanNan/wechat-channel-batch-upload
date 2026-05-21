@@ -5,7 +5,6 @@ Flask + 拖拽上传界面 + Playwright 后端
 import os
 import sys
 import json
-import csv
 import re
 import asyncio
 import atexit
@@ -211,8 +210,8 @@ async def _run_account_upload(account_name: str, profile_dir: Path, headless: bo
                     state["progress"] = int((i + 1) / total * 100)
                     continue
 
-                state["_video_queue"][i]["_status"] = result.get("status", "unknown")
-                if result.get("status") == "published":
+                state["_video_queue"][i]["_status"] = result.get("status", WeChatUploader.STATUS_UNKNOWN)
+                if result.get("status") == WeChatUploader.STATUS_PUBLISHED:
                     _add_log(account_name, f"[成功] {title}")
                 else:
                     _add_log(account_name, f"[失败] {title}: {result.get('error', '')}")
@@ -418,6 +417,7 @@ def api_account_upload_status(name):
             cancelled_is_set = ev.is_set()
     except Exception as e:
         log.debug(f"非关键操作失败: {e}")
+    return jsonify({
         "running": state.get("running", False),
         "status": state.get("status", ""),
         "progress": state.get("progress", 0),
@@ -468,40 +468,6 @@ def api_account_upload_skip(name):
         asyncio.run_coroutine_threadsafe(_async_set_event(skip_ev), _event_loop)
         return jsonify({"message": "已跳过当前视频"})
     return jsonify({"error": "跳过信号不可用"})
-
-@app.route("/api/accounts/<name>/queue", methods=["POST"])
-def api_account_update_queue(name):
-    """Replace the queue for an account. Works when not actively uploading."""
-    state = _get_or_create_account_state(name)
-    if state["running"]:
-        return jsonify({"error": "上传中不支持修改队列，请使用 skip"}), 409
-
-    data = request.get_json()
-    if not data or "videos" not in data:
-        return jsonify({"error": "缺少 videos 字段"}), 400
-
-    state["_video_queue"] = data["videos"]
-    state["_interval_min"] = data.get("interval_min", 0)
-    return jsonify({"message": f"队列已更新 ({len(data['videos'])} 条)"})
-
-@app.route("/api/accounts/<name>/upload/queue", methods=["GET"])
-def api_account_get_queue(name):
-    """Get current queue and upload state for an account."""
-    state = _get_or_create_account_state(name)
-    cancelled_is_set = False
-    ev = state.get("cancelled")
-    if ev is True or (isinstance(ev, asyncio.Event) and ev.is_set()):
-        cancelled_is_set = True
-    return jsonify({
-        "running": state.get("running", False),
-        "status": state.get("status", ""),
-        "progress": state.get("progress", 0),
-        "logs": state.get("logs", []),
-        "cancelled": cancelled_is_set,
-        "queue": state.get("_video_queue", []),
-        "interval_min": state.get("_interval_min", 0),
-        "current_index": state.get("_current_index", 0),
-    })
 
 @app.route("/api/upload/status/all", methods=["GET"])
 def api_all_upload_status():
