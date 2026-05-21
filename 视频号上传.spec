@@ -10,9 +10,10 @@ _ms_browsers = [
     (_msroot + '/winldd-1007', 'ms-playwright/winldd-1007'),
 ]
 
+_here = r'E:/project/wechat_chanel'
 a = Analysis(
-    ['app.py'],
-    pathex=[],
+    [_os.path.join(_here, 'app.py')],
+    pathex=[_here],
     binaries=[],
     datas=[
         ('templates', 'templates'),

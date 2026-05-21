@@ -32,6 +32,11 @@ def wait_for_flask():
 def main():
     from server import app  # 延迟导入，窗口先出现
 
+    if getattr(sys, 'frozen', False):
+        from jinja2 import FileSystemLoader
+        _tpl = Path(sys._MEIPASS) / "templates"
+        app.jinja_loader = FileSystemLoader(str(_tpl))
+
     def run_flask():
         app.run(host="127.0.0.1", port=PORT, debug=False)
 

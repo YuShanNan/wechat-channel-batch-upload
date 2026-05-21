@@ -253,6 +253,7 @@ async def _run_account_upload(account_name: str, profile_dir: Path, headless: bo
 
 @app.route("/")
 def index():
+    # v2 marker: FileSystemLoader fix 2026-05-22
     return render_template("index.html")
 
 @app.route("/api/debug", methods=["GET"])
