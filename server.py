@@ -393,6 +393,105 @@ def api_account_upload_start(name):
 
     return jsonify({"message": f"账号 {name} 上传已启动"})
 
+@app.route("/api/accounts/<name>/upload/status", methods=["GET"])
+def api_account_upload_status(name):
+    """Get upload status for a specific account."""
+    state = _get_or_create_account_state(name)
+    cancelled_is_set = False
+    try:
+        ev = state.get("cancelled")
+        if ev is True:
+            cancelled_is_set = True
+        elif isinstance(ev, asyncio.Event):
+            cancelled_is_set = ev.is_set()
+    except Exception:
+        pass
+    return jsonify({
+        "running": state.get("running", False),
+        "status": state.get("status", ""),
+        "progress": state.get("progress", 0),
+        "logs": state.get("logs", [])[-20:],
+        "result": state.get("result"),
+        "cancelled": cancelled_is_set,
+        "queue": [
+            {"title": v.get("title", ""), "name": Path(v.get("video_path", "")).name,
+             "status": v.get("_status", "")}
+            for v in state.get("_video_queue", [])
+        ],
+        "current_index": state.get("_current_index", 0),
+    })
+
+@app.route("/api/accounts/<name>/upload/cancel", methods=["POST"])
+def api_account_upload_cancel(name):
+    """Cancel upload for a specific account."""
+    state = _get_or_create_account_state(name)
+    if not state["running"]:
+        return jsonify({"message": "该账号无进行中的上传"})
+
+    log.info(f"取消上传 [{name}]")
+    cancel_ev = state.get("cancelled")
+    if isinstance(cancel_ev, asyncio.Event):
+        asyncio.run_coroutine_threadsafe(_async_set_event(cancel_ev), _event_loop)
+
+    skip_ev = state.get("skip_current")
+    if isinstance(skip_ev, asyncio.Event):
+        asyncio.run_coroutine_threadsafe(_async_set_event(skip_ev), _event_loop)
+
+    uploader = _uploader_cache.pop(name, None)
+    if uploader:
+        _close_uploader_safe(uploader)
+
+    state["status"] = "已取消"
+    state["running"] = False
+    return jsonify({"message": "已取消"})
+
+@app.route("/api/accounts/<name>/upload/skip", methods=["POST"])
+def api_account_upload_skip(name):
+    """Skip the current video for an account."""
+    state = _get_or_create_account_state(name)
+    if not state["running"]:
+        return jsonify({"error": "该账号无进行中的上传"}), 400
+
+    skip_ev = state.get("skip_current")
+    if isinstance(skip_ev, asyncio.Event):
+        asyncio.run_coroutine_threadsafe(_async_set_event(skip_ev), _event_loop)
+        return jsonify({"message": "已跳过当前视频"})
+    return jsonify({"error": "跳过信号不可用"})
+
+@app.route("/api/accounts/<name>/queue", methods=["POST"])
+def api_account_update_queue(name):
+    """Replace the queue for an account. Works when not actively uploading."""
+    state = _get_or_create_account_state(name)
+    if state["running"]:
+        return jsonify({"error": "上传中不支持修改队列，请使用 skip"}), 409
+
+    data = request.get_json()
+    if not data or "videos" not in data:
+        return jsonify({"error": "缺少 videos 字段"}), 400
+
+    state["_video_queue"] = data["videos"]
+    state["_interval_min"] = data.get("interval_min", 0)
+    return jsonify({"message": f"队列已更新 ({len(data['videos'])} 条)"})
+
+@app.route("/api/accounts/<name>/upload/queue", methods=["GET"])
+def api_account_get_queue(name):
+    """Get current queue and upload state for an account."""
+    state = _get_or_create_account_state(name)
+    cancelled_is_set = False
+    ev = state.get("cancelled")
+    if ev is True or (isinstance(ev, asyncio.Event) and ev.is_set()):
+        cancelled_is_set = True
+    return jsonify({
+        "running": state.get("running", False),
+        "status": state.get("status", ""),
+        "progress": state.get("progress", 0),
+        "logs": state.get("logs", []),
+        "cancelled": cancelled_is_set,
+        "queue": state.get("_video_queue", []),
+        "interval_min": state.get("_interval_min", 0),
+        "current_index": state.get("_current_index", 0),
+    })
+
 @app.route("/api/accounts/add-with-scan", methods=["POST"])
 def api_add_account_with_scan():
     """扫码添加账号：后台无头浏览器 → 截取二维码 → 前端展示 → 自动完成登录"""
