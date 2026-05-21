@@ -200,30 +200,45 @@
   .theme-toggle{position:fixed;top:12px;right:12px;background:none;border:1px solid var(--border);border-radius:6px;font-size:14px;padding:4px 8px;cursor:pointer;color:var(--text);z-index:200;font-family:inherit;transition:all .15s}
   .theme-toggle:hover{background:var(--hover-bg)}
 
-  @media(max-width:800px){.main{grid-template-columns:1fr}}
+  .app-layout{display:flex;height:100vh;overflow:hidden}
+  .sidebar{width:200px;min-width:200px;background:var(--card);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow-y:auto}
+  .sidebar-header{padding:12px 14px;font-size:13px;font-weight:600;color:var(--text);border-bottom:1px solid var(--border)}
+  .acct-item{padding:10px 14px;cursor:pointer;border-left:3px solid transparent;transition:all .15s;font-size:13px;display:flex;flex-direction:column;gap:2px}
+  .acct-item:hover{background:var(--hover-bg)}
+  .acct-item.active{border-left-color:var(--green);background:var(--hover-bg)}
+  .acct-item .acct-nick{font-weight:500;color:var(--text)}
+  .acct-item .acct-stat{font-size:11px;color:var(--text2)}
+  .acct-item .acct-stat.running{color:var(--green)}
+  .acct-item .acct-stat.error{color:var(--red)}
+  .sidebar-footer{padding:10px 14px;border-top:1px solid var(--border);margin-top:auto}
+  .btn-sidebar{width:100%;padding:8px;border:1px dashed var(--border);border-radius:6px;background:none;color:var(--text2);cursor:pointer;font-size:12px;font-family:inherit;transition:all .15s}
+  .btn-sidebar:hover{border-color:var(--green);color:var(--green)}
+  .main-area{flex:1;overflow-y:auto;padding:20px;background:var(--bg)}
+  .main-empty{display:flex;align-items:center;justify-content:center;height:100%;color:var(--text2);font-size:14px}
+
+
+  @media(max-width:800px){.app-layout{flex-direction:column}.sidebar{width:100%;min-width:0;max-height:120px;flex-shrink:0}}
 </style>
 </head>
 <body>
 
 <button class="theme-toggle" id="theme-toggle" onclick="toggleTheme()" title="切换暗色模式">🌙</button>
 
-<div class="main">
-  <div class="left">
-    <!-- 视频拖入 -->
-    <div class="card">
-      <div class="dropzone" id="video-dz">
-        <div class="dz-icon">+</div>
-        <div class="dz-title">拖拽或点击选择视频</div>
-        <div class="dz-hint">MP4/H.264，不超过 20GB，支持多选</div>
-      </div>
-      <input type="file" id="video-input" accept="video/mp4,video/*" multiple style="display:none">
+<div class="app-layout">
+  <div class="sidebar" id="sidebar">
+    <div class="sidebar-header">账号列表</div>
+    <div id="sidebar-accounts"></div>
+    <div class="sidebar-footer">
+      <button class="btn-sidebar" onclick="addAccount()">+ 添加账号</button>
+      <button class="btn-sidebar" style="margin-top:4px" onclick="openAccountManager()">管理账号</button>
     </div>
-
-    <!-- 视频预览 -->
-    <div class="card" id="preview-card" style="display:none">
-      <div class="preview-wrap" id="preview-wrap">
-        <video class="video-preview" id="video-preview-a" onclick="togglePreviewPlay()" style="display:none"></video>
-        <video class="video-preview" id="video-preview-b" onclick="togglePreviewPlay()" style="display:none"></video>
+  </div>
+  <div class="main-area" id="main-area">
+    <div class="main-empty" id="main-empty">← 选择或添加一个账号开始</div>
+    <div id="main-content" style="display:none">
+    </div>
+  </div>
+</div>
         <div class="preview-ctrls">
           <button class="preview-btn" id="preview-play-btn" onclick="togglePreviewPlay()">▶</button>
           <div class="preview-bar" id="preview-bar" onclick="seekPreview(event)">
@@ -343,582 +358,790 @@
 </div>
 
 <script>
-let accounts=[], videoQueue=[], currentCoverPath='';
+// ==================== 安全措施 ====================
+window.addEventListener('beforeunload', (e) => {
+  const hasRunning = Object.values(accountStates).some(s => s.running);
+  if (hasRunning) {
+    e.preventDefault();
+    e.returnValue = '有上传任务正在进行中，确定要离开吗？';
+    return e.returnValue;
+  }
+});
+document.addEventListener('contextmenu', e => e.preventDefault());
 
-// ==================== 账号 ====================
-async function loadAccounts(){
-  const res=await fetch('/api/accounts'); const data=await res.json();
-  accounts=data.accounts||[];
-  refreshSelect();
+// ==================== 状态模型 ====================
+let accounts = [];
+let currentAccount = null;
+let accountStates = {};  // { accountName: { videoQueue, coverPath, form, ... } }
+let activeV = 'a', loading = false;
+let _statusPollTimer = null, _allPollTimer = null;
+
+function initAccountState(name) {
+  if (!accountStates[name]) {
+    accountStates[name] = {
+      videoQueue: [],
+      coverPath: '',
+      form: { title: '', desc: '', drama: '', schedule: 'now', time: '', interval: 0 },
+      status: 'idle',
+      progress: 0,
+      logs: [],
+      running: false
+    };
+  }
+  return accountStates[name];
+}
+
+// ==================== 账号加载与侧边栏 ====================
+async function loadAccounts() {
+  const res = await fetch('/api/accounts');
+  const data = await res.json();
+  accounts = data.accounts || [];
+  renderSidebar();
   refreshAccountTable();
 }
 loadAccounts();
 
-function refreshSelect(){
-  const sel=document.getElementById('account-select');
-  const cur=sel.value;
-  sel.innerHTML='<option value="">选择账号…</option>'+
-    accounts.map(a=>`<option value="${a.name}">${a.nickname||a.name}</option>`).join('');
-  sel.value=accounts.some(a=>a.name===cur)?cur:'';
-  refreshCustSelect();
-}
-
-function refreshAccountTable(){
-  const tbody=document.getElementById('acct-tbody');
-  const empty=document.getElementById('acct-empty');
-  if(!accounts.length){
-    tbody.innerHTML='';
-    empty.style.display='';
+function renderSidebar() {
+  const container = document.getElementById('sidebar-accounts');
+  if (!accounts.length) {
+    container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text2);font-size:12px">暂无账号</div>';
     return;
   }
-  empty.style.display='none';
-  tbody.innerHTML=accounts.map(a=>`<tr>
-    <td>${esc(a.nickname||'')}</td>
-    <td>${esc(a.last_login||'未登录')}</td>
-    <td><div class="acct-actions">
-      ${a.last_login
-        ? `<button class="btn-sm btn-mgmt" onclick="openDashboard('${esc(a.name)}')">后台</button>`
-        : `<button class="btn-sm btn-mgmt" onclick="loginAccount('${esc(a.name)}')">登录</button>`
-      }
-      <button class="btn-sm btn-danger" onclick="deleteAccount('${esc(a.name)}')">删除</button>
-    </div></td>
-  </tr>`).join('');
-}
-
-function esc(s){return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;')}
-
-function openAccountManager(){
-  document.getElementById('acct-overlay').classList.add('show');
-  refreshAccountTable();
-}
-function closeAccountManager(){
-  document.getElementById('acct-overlay').classList.remove('show');
-}
-
-let qrcodeTimer=null;
-
-function openQrcodeModal(){
-  document.getElementById('qrcode-overlay').classList.add('show');
-  document.getElementById('qrcode-img').style.display='none';
-  document.getElementById('qrcode-spinner').style.display='';
-  document.getElementById('qrcode-status-text').textContent='正在获取二维码...';
-}
-
-function closeQrcodeModal(){
-  document.getElementById('qrcode-overlay').classList.remove('show');
-  if(qrcodeTimer){clearTimeout(qrcodeTimer);qrcodeTimer=null}
-}
-
-async function cancelScan(){
-  await fetch('/api/accounts/add-with-scan/cancel',{method:'POST'});
-  closeQrcodeModal();
-}
-
-async function addAccount(){
-  openQrcodeModal();
-  const res=await fetch('/api/accounts/add-with-scan',{method:'POST'});
-  const data=await res.json();
-  if(data.error){
-    document.getElementById('qrcode-status-text').textContent=data.error;
-    setTimeout(closeQrcodeModal,2000);
-    return;
-  }
-  pollQrcodeStatus();
-}
-
-const _qrcodeStatusMap={
-  loading:'正在获取二维码...',
-  waiting:'请使用微信扫描二维码',
-  scanned:'请使用微信扫描二维码',
-  confirming:'请使用微信扫描二维码',
-  expired:'二维码已过期，正在刷新...',
-  logged_in:'登录成功！',
-  timeout:'登录超时',
-  cancelled:'已取消',
-};
-
-async function pollQrcodeStatus(){
-  const sr=await fetch('/api/accounts/add-with-scan/status');
-  const st=await sr.json();
-  const img=document.getElementById('qrcode-img');
-  const spinner=document.getElementById('qrcode-spinner');
-  const statusText=document.getElementById('qrcode-status-text');
-
-  if(st.qrcode){
-    img.src=st.qrcode;
-    img.style.display='';
-    spinner.style.display='none';
-  }
-  statusText.textContent=_qrcodeStatusMap[st.status]||st.status;
-
-  if(!st.scanning){
-    spinner.style.display='none';
-    if(st.result&&st.result.success){
-      await loadAccounts();
-      setTimeout(closeQrcodeModal,1500);
-    }else{
-      setTimeout(closeQrcodeModal,3000);
-    }
-    return;
-  }
-  qrcodeTimer=setTimeout(pollQrcodeStatus,1000);
-}
-
-async function deleteAccount(name){
-  if(!confirm(`确定删除账号 ${name}？此操作不删除浏览器数据。`))return;
-  await fetch('/api/accounts/'+encodeURIComponent(name),{method:'DELETE'});
-  await loadAccounts();
-  toast('已删除');
-}
-
-async function openDashboard(name){
-  const res=await fetch('/api/accounts/'+encodeURIComponent(name)+'/dashboard',{method:'POST'});
-  const data=await res.json();
-  if(data.error){toast(data.error);return}
-  toast('后台打开中');
-}
-
-async function loginAccount(name){
-  const res=await fetch('/api/accounts/'+encodeURIComponent(name)+'/login',{method:'POST'});
-  const data=await res.json();
-  if(data.error){toast(data.error);return}
-  toast('网页打开中，请稍等');
-  let lastSeen=null;
-  for(let i=0;i<60;i++){
-    await new Promise(r=>setTimeout(r,3000));
-    await loadAccounts();
-    const acct=accounts.find(a=>a.name===name);
-    const cur=acct?acct.last_login:'';
-    if(cur&&cur!==lastSeen){lastSeen=cur;refreshAccountTable()}
-    if(cur&&cur!=='')break;
-  }
-}
-
-// ==================== 视频上传 ====================
-const videoDz=document.getElementById('video-dz');
-const videoInput=document.getElementById('video-input');
-
-videoDz.addEventListener('click',()=>videoInput.click());
-videoDz.addEventListener('dragover',e=>{e.preventDefault();videoDz.classList.add('dragover')});
-videoDz.addEventListener('dragleave',()=>videoDz.classList.remove('dragover'));
-videoDz.addEventListener('drop',async e=>{
-  e.preventDefault();videoDz.classList.remove('dragover');
-  await uploadFiles(e.dataTransfer.files,'video');
-});
-videoInput.addEventListener('change',async()=>{
-  await uploadFiles(videoInput.files,'video'); videoInput.value='';
-});
-
-async function uploadFiles(files,type){
-  const newVideos=[];
-  for(const f of files){
-    if(type==='video'&&!f.type.startsWith('video/'))continue;
-    if(type==='cover'&&!f.type.startsWith('image/'))continue;
-
-    videoDz.innerHTML=`<div class="dz-file">上传中: ${f.name}</div><div class="dz-progress"><div class="dz-progress-fill" id="dz-pct" style="width:0%"></div></div>`;
-    videoDz.classList.add('has-file');
-
-    const form=new FormData();form.append('file',f);
-    let res;
-    try{
-      res=await new Promise((resolve,reject)=>{
-        const xhr=new XMLHttpRequest();
-        xhr.upload.onprogress=e=>{
-          if(e.lengthComputable){
-            const pct=Math.round(e.loaded/e.total*100);
-            const el=document.getElementById('dz-pct');
-            if(el)el.style.width=pct+'%';
-          }
-        };
-        xhr.onload=()=>{try{resolve(JSON.parse(xhr.responseText))}catch(e){reject(e)}};
-        xhr.onerror=()=>reject(new Error('上传失败'));
-        xhr.open('POST','/api/upload-temp');xhr.send(form);
-      });
-    }catch(e){toast('上传失败: '+e.message);continue}
-
-    if(res.error){toast(res.error);continue}
-    if(res.path){
-      if(type==='video'){
-        newVideos.push({path:res.path,name:res.name,status:'',cardHeight:null});
-      }else{
-        setCoverData(res.path,res.name);
-      }
-    }
-  }
-  // 全部上传完后一次性加入队列
-  if(newVideos.length>0){
-    for(const v of videoQueue){if(v.status)v.status=''}
-    videoQueue.push(...newVideos);
-  }
-  videoDz.classList.remove('has-file');
-  videoDz.innerHTML='<div class="dz-icon">+</div><div class="dz-title">拖拽或点击选择视频</div><div class="dz-hint">MP4/H.264，不超过 20GB，支持多选</div>';
-  renderQueue();
-}
-
-// ==================== 封面 ====================
-const coverDz=document.getElementById('cover-dz');
-const coverInput=document.getElementById('cover-input');
-
-coverDz.addEventListener('click',()=>coverInput.click());
-coverDz.addEventListener('dragover',e=>{e.preventDefault();coverDz.classList.add('dragover')});
-coverDz.addEventListener('dragleave',()=>coverDz.classList.remove('dragover'));
-coverDz.addEventListener('drop',async e=>{
-  e.preventDefault();coverDz.classList.remove('dragover');
-  await uploadFiles(e.dataTransfer.files,'cover');
-});
-coverInput.addEventListener('change',async()=>{
-  await uploadFiles(coverInput.files,'cover'); coverInput.value='';
-});
-
-function setCoverData(path,name){
-  currentCoverPath=path;
-  coverDz.innerHTML=`<div class="cv-file">${name}</div><img class="cover-thumb" src="/api/preview/${encodeURIComponent(path)}">`;
-  coverDz.classList.add('has-file');
-}
-
-// ==================== 队列渲染 ====================
-function renderQueue(){
-  const row=document.getElementById('queue-row');
-  const countEl=document.getElementById('queue-count');
-  const previewCard=document.getElementById('preview-card');
-  countEl.textContent=videoQueue.length;
-
-  if(videoQueue.length===0){
-    row.innerHTML='';
-    previewCard.style.display='none';
-    return;
-  }
-  previewCard.style.display='';
-
-  const W=140;
-  row.innerHTML=videoQueue.map((v,i)=>{
-    const cls=v.status==='done'?'done':v.status==='fail'?'fail':'';
-    const src=v.path?`/api/preview/${encodeURIComponent(v.path)}`:'';
-    const h=v.cardHeight||78;
-    return `<div id="qw-${i}" style="display:flex;flex-direction:column;align-items:center;gap:2px" onclick="updatePreview(${i})" draggable="true" onDragStart="onDragStart(event,${i})" onDragOver="onDragOver(event)" onDrop="onDrop(event,${i})" onDragEnd="onDragEnd(event)">
-      <div class="queue-card${i===0?' active':''}" id="qc-${i}" style="width:${W}px;height:${h}px">
-        ${src?`<video class="qc-thumb" id="qcv-${i}" src="${src}" preload="metadata" muted onloadedmetadata="setCardHeight(this,document.getElementById('qc-'+${i}),${i})"></video>`:`<div class="qc-thumb" id="qcv-${i}" style="display:flex;align-items:center;justify-content:center;color:#666;font-size:11px">...</div>`}
-        ${cls?`<div class="qc-status ${cls}">${cls==='done'?'✓':'✗'}</div>`:''}
-        <div class="qc-remove" onclick="event.stopPropagation();removeFromQueue(${i})">✕</div>
-      </div>
-      <div class="qc-name" title="${v.name}">${v.name}</div>
+  container.innerHTML = accounts.map(a => {
+    const st = accountStates[a.name] || { status: 'idle', progress: 0, running: false };
+    const active = currentAccount === a.name ? ' active' : '';
+    const statCls = st.running ? 'running' : (st.status.startsWith('失败') || st.status.startsWith('异常') ? 'error' : '');
+    const statText = st.running
+      ? st.status + ' ' + st.progress + '%'
+      : (st.status === '全部完成' ? '已完成' : (st.status === 'idle' ? '空闲' : st.status));
+    return `<div class="acct-item${active}" onclick="switchAccount('${esc(a.name)}')">
+      <div class="acct-nick">${esc(a.nickname || a.name)}</div>
+      <div class="acct-stat ${statCls}">${esc(statText)}</div>
     </div>`;
   }).join('');
+}
 
-  // 默认用存储高度，未加载过 metadata 的不主动加载（延迟到点击时）
-  videoQueue.forEach((v,i)=>{
-    if(v.cardHeight){
-      const card=document.getElementById('qc-'+i);
-      if(card)card.style.height=v.cardHeight+'px';
+function switchAccount(name) {
+  saveCurrentForm();
+  currentAccount = name;
+  initAccountState(name);
+  renderSidebar();
+  renderMainContent();
+  if (accountStates[name].running) {
+    startStatusPolling(name);
+  }
+}
+
+function saveCurrentForm() {
+  if (!currentAccount) return;
+  const st = accountStates[currentAccount];
+  const titleEl = document.getElementById('form-title');
+  const descEl = document.getElementById('form-desc');
+  const dramaEl = document.getElementById('form-drama');
+  const schedEl = document.querySelector('input[name=schedule]:checked');
+  const timeEl = document.getElementById('form-time');
+  const intvEl = document.getElementById('form-interval');
+  if (!titleEl) return;  // elements not rendered yet
+  st.form = {
+    title: titleEl.value || st.form.title,
+    desc: descEl ? descEl.value : st.form.desc,
+    drama: dramaEl ? dramaEl.value : st.form.drama,
+    schedule: schedEl ? schedEl.value : 'now',
+    time: timeEl ? timeEl.value : st.form.time,
+    interval: intvEl ? (parseInt(intvEl.value) || 0) : st.form.interval
+  };
+}
+
+// ==================== 主内容区 ====================
+function renderMainContent() {
+  if (!currentAccount) {
+    document.getElementById('main-empty').style.display = '';
+    document.getElementById('main-content').style.display = 'none';
+    return;
+  }
+  document.getElementById('main-empty').style.display = 'none';
+  document.getElementById('main-content').style.display = '';
+
+  const st = accountStates[currentAccount];
+  const container = document.getElementById('main-content');
+  container.innerHTML = `
+    <div class="main">
+      <div class="left">
+        <div class="card">
+          <div class="dropzone" id="video-dz">
+            <div class="dz-icon">+</div>
+            <div class="dz-title">拖拽或点击选择视频</div>
+            <div class="dz-hint">MP4/H.264，不超过 20GB，支持多选</div>
+          </div>
+          <input type="file" id="video-input" accept="video/mp4,video/*" multiple style="display:none">
+        </div>
+        <div class="card" id="preview-card" style="display:none">
+          <div class="preview-wrap" id="preview-wrap">
+            <video class="video-preview" id="video-preview-a" onclick="togglePreviewPlay()" style="display:none"></video>
+            <video class="video-preview" id="video-preview-b" onclick="togglePreviewPlay()" style="display:none"></video>
+            <div class="preview-ctrls">
+              <button class="preview-btn" id="preview-play-btn" onclick="togglePreviewPlay()">▶</button>
+              <div class="preview-bar" id="preview-bar" onclick="seekPreview(event)">
+                <div class="preview-bar-track"><div class="preview-bar-fill" id="preview-bar-fill" style="width:0%"></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-title">上传队列 (<span id="queue-count">0</span>)</div>
+          <div class="queue-row" id="queue-row"></div>
+        </div>
+      </div>
+      <div class="right">
+        <div class="card">
+          <div class="card-title">封面</div>
+          <div class="cover-drop" id="cover-dz">
+            <div class="cv-label">个人主页封面</div><div class="cv-ratio">3:4</div>
+          </div>
+          <input type="file" id="cover-input" accept="image/png,image/jpeg,image/webp" style="display:none">
+        </div>
+        <div class="card" style="flex:1">
+          <div style="display:flex;flex-direction:column;gap:14px">
+            <div class="form-group"><label>描述</label><textarea id="form-desc" placeholder="添加描述 #话题 &commat;视频号"></textarea></div>
+            <div class="form-group"><label>短标题</label><input id="form-title" placeholder="概括视频主要内容，6-16字" maxlength="20"></div>
+            <div class="form-group"><label>短剧名称</label><input id="form-drama" placeholder="输入短剧名称"></div>
+            <div class="form-group">
+              <label>定时开始上传</label>
+              <div class="radio-row">
+                <label><input type="radio" name="schedule" value="now" checked onchange="toggleSchedule()">不定时</label>
+                <label><input type="radio" name="schedule" value="scheduled" onchange="toggleSchedule()">定时</label>
+              </div>
+              <input type="datetime-local" id="form-time" style="display:none">
+            </div>
+            <div class="form-group"><label>发布间隔（分钟）</label><input type="number" id="form-interval" value="0" min="0" max="1440" placeholder="0 = 无间隔"></div>
+            <div style="font-size:13px;color:var(--text2)">位置: 不显示</div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="acct-upload-status" id="upload-status-bar" style="display:none">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+              <span style="font-size:13px;font-weight:500;flex:1" id="upload-status-text"></span>
+              <span style="font-size:12px;color:var(--text2)" id="upload-status-pct"></span>
+            </div>
+            <div class="progress-bar" style="height:6px;background:var(--bar-track);border-radius:3px;overflow:hidden">
+              <div class="progress-fill" id="upload-status-fill" style="height:100%;background:var(--green);border-radius:3px;transition:width .3s;width:0%"></div>
+            </div>
+            <div style="margin-top:6px;font-size:11px;color:var(--text2);max-height:60px;overflow-y:auto;white-space:pre-wrap" id="upload-status-logs"></div>
+          </div>
+          <button class="btn btn-publish" id="btn-publish" onclick="startUpload()">发表</button>
+          <button class="btn btn-danger btn-full" id="btn-cancel-upload" style="display:none;margin-top:8px" onclick="cancelUpload()">取消上传</button>
+          <button class="btn btn-full" id="btn-skip-current" style="display:none;margin-top:4px;background:var(--border);color:var(--label)" onclick="skipCurrentVideo()">跳过当前视频</button>
+        </div>
+      </div>
+    </div>
+  `;
+
+  // Restore saved form values
+  document.getElementById('form-title').value = st.form.title || '';
+  document.getElementById('form-desc').value = st.form.desc || '';
+  document.getElementById('form-drama').value = st.form.drama || '';
+  const schedRadio = document.querySelector('input[name=schedule][value="' + (st.form.schedule || 'now') + '"]');
+  if (schedRadio) schedRadio.checked = true;
+  document.getElementById('form-time').value = st.form.time || '';
+  document.getElementById('form-time').style.display = st.form.schedule === 'scheduled' ? 'block' : 'none';
+  document.getElementById('form-interval').value = st.form.interval || 0;
+
+  // Restore cover state
+  if (st.coverPath) {
+    setCoverDataForAccount(st.coverPath, getFileName(st.coverPath));
+  }
+
+  // Restore queue rendering
+  renderQueueForAccount();
+
+  // Restore upload state bar
+  if (st.running) {
+    showUploadBar(true);
+    updateUploadBar(st);
+  }
+
+  // Rebind events
+  bindDropzoneEvents();
+  bindCoverEvents();
+
+  // Reset preview state
+  activeV = 'a'; loading = false;
+}
+
+function getFileName(path) {
+  const parts = path.replace(/\\/g, '/').split('/');
+  return parts[parts.length - 1];
+}
+
+// ==================== 拖拽区事件绑定 ====================
+function bindDropzoneEvents() {
+  const dz = document.getElementById('video-dz');
+  const input = document.getElementById('video-input');
+  if (!dz || !input) return;
+
+  // Remove old listeners by cloning
+  const newDz = dz.cloneNode(true);
+  dz.parentNode.replaceChild(newDz, dz);
+  const newInput = input.cloneNode(true);
+  input.parentNode.replaceChild(newInput, input);
+
+  newDz.addEventListener('click', () => newInput.click());
+  newDz.addEventListener('dragover', e => { e.preventDefault(); newDz.classList.add('dragover'); });
+  newDz.addEventListener('dragleave', () => newDz.classList.remove('dragover'));
+  newDz.addEventListener('drop', async e => {
+    e.preventDefault(); newDz.classList.remove('dragover');
+    await uploadFiles(e.dataTransfer.files, 'video');
+  });
+  newInput.addEventListener('change', async () => {
+    await uploadFiles(newInput.files, 'video'); newInput.value = '';
+  });
+}
+
+function bindCoverEvents() {
+  const dz = document.getElementById('cover-dz');
+  const input = document.getElementById('cover-input');
+  if (!dz || !input) return;
+
+  const newDz = dz.cloneNode(true);
+  dz.parentNode.replaceChild(newDz, dz);
+  const newInput = input.cloneNode(true);
+  input.parentNode.replaceChild(newInput, input);
+
+  newDz.addEventListener('click', () => newInput.click());
+  newDz.addEventListener('dragover', e => { e.preventDefault(); newDz.classList.add('dragover'); });
+  newDz.addEventListener('dragleave', () => newDz.classList.remove('dragover'));
+  newDz.addEventListener('drop', async e => {
+    e.preventDefault(); newDz.classList.remove('dragover');
+    await uploadFiles(e.dataTransfer.files, 'cover');
+  });
+  newInput.addEventListener('change', async () => {
+    await uploadFiles(newInput.files, 'cover'); newInput.value = '';
+  });
+}
+
+// ==================== 文件上传 ====================
+async function uploadFiles(files, type) {
+  if (!currentAccount) { toast('请先选择账号'); return; }
+  const st = accountStates[currentAccount];
+  const newVideos = [];
+  const dz = document.getElementById('video-dz');
+
+  for (const f of files) {
+    if (type === 'video' && !f.type.startsWith('video/')) continue;
+    if (type === 'cover' && !f.type.startsWith('image/')) continue;
+
+    if (type === 'video' && dz) {
+      dz.innerHTML = '<div class="dz-file">上传中: ' + f.name + '</div><div class="dz-progress"><div class="dz-progress-fill" id="dz-pct" style="width:0%"></div></div>';
+      dz.classList.add('has-file');
+    }
+
+    const form = new FormData(); form.append('file', f);
+    let res;
+    try {
+      res = await new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.upload.onprogress = e => {
+          if (e.lengthComputable) {
+            const pct = Math.round(e.loaded / e.total * 100);
+            const el = document.getElementById('dz-pct');
+            if (el) el.style.width = pct + '%';
+          }
+        };
+        xhr.onload = () => { try { resolve(JSON.parse(xhr.responseText)); } catch (e) { reject(e); } };
+        xhr.onerror = () => reject(new Error('上传失败'));
+        xhr.open('POST', '/api/upload-temp'); xhr.send(form);
+      });
+    } catch (e) { toast('上传失败: ' + e.message); continue; }
+
+    if (res.error) { toast(res.error); continue; }
+    if (res.path) {
+      if (type === 'video') {
+        newVideos.push({ path: res.path, name: res.name, status: '', cardHeight: null });
+      } else {
+        st.coverPath = res.path;
+        setCoverDataForAccount(res.path, res.name);
+      }
+    }
+  }
+  if (newVideos.length > 0) {
+    st.videoQueue.push(...newVideos);
+  }
+  if (dz) {
+    dz.classList.remove('has-file');
+    dz.innerHTML = '<div class="dz-icon">+</div><div class="dz-title">拖拽或点击选择视频</div><div class="dz-hint">MP4/H.264，不超过 20GB，支持多选</div>';
+  }
+  renderQueueForAccount();
+}
+
+function setCoverDataForAccount(path, name) {
+  const dz = document.getElementById('cover-dz');
+  if (!dz) return;
+  dz.innerHTML = '<div class="cv-file">' + name + '</div><img class="cover-thumb" src="/api/preview/' + encodeURIComponent(path) + '">';
+  dz.classList.add('has-file');
+}
+
+// ==================== 队列渲染（per-account） ====================
+function renderQueueForAccount() {
+  const st = accountStates[currentAccount];
+  const queue = st.videoQueue;
+  const row = document.getElementById('queue-row');
+  const countEl = document.getElementById('queue-count');
+  const previewCard = document.getElementById('preview-card');
+  if (!row) return;
+
+  countEl.textContent = queue.length;
+  if (queue.length === 0) {
+    row.innerHTML = '';
+    if (previewCard) previewCard.style.display = 'none';
+    return;
+  }
+  if (previewCard) previewCard.style.display = '';
+
+  const W = 140;
+  row.innerHTML = queue.map((v, i) => {
+    const cls = v.status === 'done' ? 'done' : v.status === 'fail' ? 'fail' : '';
+    const src = v.path ? '/api/preview/' + encodeURIComponent(v.path) : '';
+    const h = v.cardHeight || 78;
+    return '<div id="qw-' + i + '" style="display:flex;flex-direction:column;align-items:center;gap:2px" onclick="updatePreview(' + i + ')" draggable="true" onDragStart="onDragStart(event,' + i + ')" onDragOver="onDragOver(event)" onDrop="onDrop(event,' + i + ')" onDragEnd="onDragEnd(event)">'
+      + '<div class="queue-card' + (i === 0 ? ' active' : '') + '" id="qc-' + i + '" style="width:' + W + 'px;height:' + h + 'px">'
+      + (src ? '<video class="qc-thumb" id="qcv-' + i + '" src="' + src + '" preload="metadata" muted onloadedmetadata="setCardHeight(this,document.getElementById(\'qc-' + i + '\'),' + i + ')"></video>' : '<div class="qc-thumb" id="qcv-' + i + '" style="display:flex;align-items:center;justify-content:center;color:#666;font-size:11px">...</div>')
+      + (cls ? '<div class="qc-status ' + cls + '">' + (cls === 'done' ? '✓' : '✗') + '</div>' : '')
+      + '<div class="qc-remove" onclick="event.stopPropagation();removeFromQueue(' + i + ')">✕</div>'
+      + '</div><div class="qc-name" title="' + v.name + '">' + v.name + '</div></div>';
+  }).join('');
+
+  queue.forEach((v, i) => {
+    if (v.cardHeight) {
+      const card = document.getElementById('qc-' + i);
+      if (card) card.style.height = v.cardHeight + 'px';
     }
   });
-
-  if(videoQueue.length>0&&!document.getElementById('preview-wrap').classList.contains('show'))updatePreview(0);
+  if (queue.length > 0 && document.getElementById('preview-wrap') && !document.getElementById('preview-wrap').classList.contains('show')) updatePreview(0);
 }
 
-function setCardHeight(vel,card,i){
-  const W=140;
-  const vw=vel.videoWidth,vh=vel.videoHeight;
-  if(vw&&vh){
-    const h=Math.round(W*vh/vw);
-    card.style.height=h+'px';
-    videoQueue[i].cardHeight=h;
+function setCardHeight(vel, card, i) {
+  const st = accountStates[currentAccount];
+  const W = 140, vw = vel.videoWidth, vh = vel.videoHeight;
+  if (vw && vh) {
+    const h = Math.round(W * vh / vw);
+    card.style.height = h + 'px';
+    st.videoQueue[i].cardHeight = h;
   }
 }
 
-function removeFromQueue(i){
-  videoQueue.splice(i,1);
-  renderQueue();
+function removeFromQueue(i) {
+  accountStates[currentAccount].videoQueue.splice(i, 1);
+  renderQueueForAccount();
 }
 
-let dragIdx=null;
-function onDragStart(e,i){
-  dragIdx=i;
-  document.getElementById('qc-'+i).classList.add('dragging');
-  e.dataTransfer.effectAllowed='move';
+// ==================== 拖拽排序 ====================
+let dragIdx = null;
+function onDragStart(e, i) {
+  dragIdx = i;
+  document.getElementById('qc-' + i).classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move';
 }
-function onDragOver(e){e.preventDefault();e.dataTransfer.dropEffect='move'}
-function onDrop(e,i){
+function onDragOver(e) { e.preventDefault(); e.dataTransfer.dropEffect = 'move'; }
+function onDrop(e, i) {
   e.preventDefault();
-  if(dragIdx===null||dragIdx===i)return;
-
-  // 直接移动 DOM 节点，不重建（避免 video 重新加载闪黑）
-  const row=document.getElementById('queue-row');
-  const wrappers=[...row.querySelectorAll('[id^="qw-"]')];
-  const srcEl=document.getElementById('qw-'+dragIdx);
-  const tgtEl=document.getElementById('qw-'+i);
-  if(!srcEl||!tgtEl)return;
-
-  // FLIP: 记录所有卡片旧位置
-  const oldRects=wrappers.map(el=>el.getBoundingClientRect());
-
-  // 移动 DOM 节点
-  if(dragIdx<i){
-    tgtEl.after(srcEl);
-  }else{
-    tgtEl.before(srcEl);
-  }
-
-  // 重排数组
-  const [item]=videoQueue.splice(dragIdx,1);
-  videoQueue.splice(i,0,item);
-
-  // 更新所有 wrapper 的 id 和事件处理（索引变了）
-  const newWrappers=[...row.querySelectorAll('[id^="qw-"]')];
-  newWrappers.forEach((w,idx)=>{
-    w.id='qw-'+idx;
-    w.setAttribute('draggable','true');
-    w.setAttribute('ondragstart','onDragStart(event,'+idx+')');
-    w.setAttribute('ondrop','onDrop(event,'+idx+')');
-    w.setAttribute('onclick','updatePreview('+idx+')');
-    w.querySelector('.queue-card').id='qc-'+idx;
-    w.querySelector('.qc-name').setAttribute('onclick','');
-    w.querySelector('.qc-remove')?.setAttribute('onclick','event.stopPropagation();removeFromQueue('+idx+')');
-    const thumb=w.querySelector('.qc-thumb');
-    if(thumb)thumb.id='qcv-'+idx;
+  if (dragIdx === null || dragIdx === i) return;
+  const row = document.getElementById('queue-row');
+  const srcEl = document.getElementById('qw-' + dragIdx);
+  const tgtEl = document.getElementById('qw-' + i);
+  if (!srcEl || !tgtEl) return;
+  const wrappers = [...row.querySelectorAll('[id^="qw-"]')];
+  const oldRects = wrappers.map(el => el.getBoundingClientRect());
+  if (dragIdx < i) { tgtEl.after(srcEl); } else { tgtEl.before(srcEl); }
+  const st = accountStates[currentAccount];
+  const [item] = st.videoQueue.splice(dragIdx, 1);
+  st.videoQueue.splice(i, 0, item);
+  const newWrappers = [...row.querySelectorAll('[id^="qw-"]')];
+  newWrappers.forEach((w, idx) => {
+    w.id = 'qw-' + idx;
+    w.setAttribute('ondragstart', 'onDragStart(event,' + idx + ')');
+    w.setAttribute('ondrop', 'onDrop(event,' + idx + ')');
+    w.setAttribute('onclick', 'updatePreview(' + idx + ')');
+    w.querySelector('.queue-card').id = 'qc-' + idx;
+    const qcRemove = w.querySelector('.qc-remove');
+    if (qcRemove) qcRemove.setAttribute('onclick', 'event.stopPropagation();removeFromQueue(' + idx + ')');
+    const thumb = w.querySelector('.qc-thumb');
+    if (thumb) thumb.id = 'qcv-' + idx;
   });
-
-  // 更新计数
-  document.getElementById('queue-count').textContent=videoQueue.length;
-
-  // FLIP 动画
-  requestAnimationFrame(()=>{
-    [...row.querySelectorAll('[id^="qw-"]')].forEach((w,j)=>{
-      if(j>=oldRects.length)return;
-      const nr=w.getBoundingClientRect();
-      const dx=oldRects[j].left-nr.left;
-      const dy=oldRects[j].top-nr.top;
-      if(dx||dy){
-        w.style.transition='none';
-        w.style.transform=`translate(${dx}px,${dy}px)`;
-        w.offsetHeight;
-        w.style.transition='';
-        w.style.transform='';
-      }
+  document.getElementById('queue-count').textContent = st.videoQueue.length;
+  requestAnimationFrame(() => {
+    [...row.querySelectorAll('[id^="qw-"]')].forEach((w, j) => {
+      if (j >= oldRects.length) return;
+      const nr = w.getBoundingClientRect();
+      const dx = oldRects[j].left - nr.left;
+      const dy = oldRects[j].top - nr.top;
+      if (dx || dy) { w.style.transition = 'none'; w.style.transform = 'translate(' + dx + 'px,' + dy + 'px)'; w.offsetHeight; w.style.transition = ''; w.style.transform = ''; }
     });
   });
 }
-function onDragEnd(e){
-  if(dragIdx!==null){
-    document.getElementById('qc-'+dragIdx)?.classList.remove('dragging');
-  }
-  dragIdx=null;
+function onDragEnd(e) {
+  if (dragIdx !== null) { document.getElementById('qc-' + dragIdx)?.classList.remove('dragging'); }
+  dragIdx = null;
 }
 
-let activeV='a', loading=false;
+// ==================== 视频预览 ====================
+function getActiveVideo() { return document.getElementById('video-preview-' + activeV); }
+function getBackVideo() { return document.getElementById('video-preview-' + (activeV === 'a' ? 'b' : 'a')); }
 
-function getActiveVideo(){return document.getElementById('video-preview-'+activeV)}
-function getBackVideo(){return document.getElementById('video-preview-'+(activeV==='a'?'b':'a'))}
-
-function updatePreview(i){
-  const wrap=document.getElementById('preview-wrap');
-  if(i===null||i>=videoQueue.length){wrap.classList.remove('show');return}
-  const src=videoQueue[i].path?`/api/preview/${encodeURIComponent(videoQueue[i].path)}`:'';
-  if(!src)return;
-
+function updatePreview(i) {
+  const st = accountStates[currentAccount];
+  const wrap = document.getElementById('preview-wrap');
+  if (i === null || !st || i >= st.videoQueue.length) { if (wrap) wrap.classList.remove('show'); return; }
+  const src = st.videoQueue[i].path ? '/api/preview/' + encodeURIComponent(st.videoQueue[i].path) : '';
+  if (!src) return;
   wrap.classList.add('show');
-  document.querySelectorAll('.queue-card').forEach((el,j)=>el.classList.toggle('active',j===i));
-  document.getElementById('preview-play-btn').textContent='▶';
-  document.getElementById('preview-bar-fill').style.width='0%';
-
-  // 点卡片时触发该卡片 metadata 加载（之前 preload=none 跳过了）
-  const qcv=document.getElementById('qcv-'+i);
-  const qc=document.getElementById('qc-'+i);
-  if(qcv&&qc&&!videoQueue[i].cardHeight){
-    if(qcv.readyState>=1)setCardHeight(qcv,qc,i);
-    else{qcv.preload='metadata';qcv.addEventListener('loadedmetadata',()=>setCardHeight(qcv,qc,i),{once:true})}
+  document.querySelectorAll('.queue-card').forEach((el, j) => el.classList.toggle('active', j === i));
+  document.getElementById('preview-play-btn').textContent = '▶';
+  document.getElementById('preview-bar-fill').style.width = '0%';
+  const qcv = document.getElementById('qcv-' + i);
+  const qc = document.getElementById('qc-' + i);
+  if (qcv && qc && !st.videoQueue[i].cardHeight) {
+    if (qcv.readyState >= 1) setCardHeight(qcv, qc, i);
+    else { qcv.preload = 'metadata'; qcv.addEventListener('loadedmetadata', () => setCardHeight(qcv, qc, i), { once: true }); }
   }
-
-  if(loading)return;
-  loading=true;
-
-  const back=getBackVideo();
-  // 先显示当前活跃 video（确保不是两个都隐藏）
-  if(!getActiveVideo().classList.contains('show')&&getActiveVideo().src){
-    getActiveVideo().style.display='block';
-  }
-  back.src=src;
-  back.oncanplay=()=>{
-    back.oncanplay=null;
-    // 切换
-    getActiveVideo().style.display='none';
+  if (loading) return;
+  loading = true;
+  const back = getBackVideo();
+  if (!getActiveVideo().classList.contains('show') && getActiveVideo().src) { getActiveVideo().style.display = 'block'; }
+  back.src = src;
+  back.oncanplay = () => {
+    back.oncanplay = null;
+    getActiveVideo().style.display = 'none';
     getActiveVideo().pause();
-    back.style.display='block';
-    activeV=activeV==='a'?'b':'a';
+    back.style.display = 'block';
+    activeV = activeV === 'a' ? 'b' : 'a';
     updateCtrlBindings();
-    loading=false;
+    loading = false;
   };
   back.load();
-  // 超时保护：1秒后强制切换
-  setTimeout(()=>{if(back.oncanplay){back.oncanplay=null;getActiveVideo().style.display='none';getActiveVideo().pause();back.style.display='block';activeV=activeV==='a'?'b':'a';updateCtrlBindings();loading=false}},1000);
+  setTimeout(() => { if (back.oncanplay) { back.oncanplay = null; getActiveVideo().style.display = 'none'; getActiveVideo().pause(); back.style.display = 'block'; activeV = activeV === 'a' ? 'b' : 'a'; updateCtrlBindings(); loading = false; } }, 1000);
 }
 
-function updateCtrlBindings(){
-  const oldA=document.getElementById('video-preview-a');
-  const oldB=document.getElementById('video-preview-b');
-  oldA.removeEventListener('timeupdate',onTimeUpdate);
-  oldB.removeEventListener('timeupdate',onTimeUpdate);
-  oldA.removeEventListener('ended',onEnded);
-  oldB.removeEventListener('ended',onEnded);
-  const v=getActiveVideo();
-  v.addEventListener('timeupdate',onTimeUpdate);
-  v.addEventListener('ended',onEnded);
+function updateCtrlBindings() {
+  const oldA = document.getElementById('video-preview-a');
+  const oldB = document.getElementById('video-preview-b');
+  if (oldA) { oldA.removeEventListener('timeupdate', onTimeUpdate); oldA.removeEventListener('ended', onEnded); }
+  if (oldB) { oldB.removeEventListener('timeupdate', onTimeUpdate); oldB.removeEventListener('ended', onEnded); }
+  const v = getActiveVideo();
+  if (v) { v.addEventListener('timeupdate', onTimeUpdate); v.addEventListener('ended', onEnded); }
+}
+function onTimeUpdate() {
+  const v = getActiveVideo();
+  if (v && v.duration) { document.getElementById('preview-bar-fill').style.width = (v.currentTime / v.duration * 100) + '%'; }
+}
+function onEnded() { document.getElementById('preview-play-btn').textContent = '▶'; }
+function togglePreviewPlay() {
+  const v = getActiveVideo();
+  if (!v) return;
+  if (v.paused) { v.play(); document.getElementById('preview-play-btn').textContent = '⏸'; }
+  else { v.pause(); document.getElementById('preview-play-btn').textContent = '▶'; }
+}
+function seekPreview(e) {
+  const bar = document.getElementById('preview-bar');
+  const rect = bar.getBoundingClientRect();
+  const pct = (e.clientX - rect.left) / rect.width;
+  const v = getActiveVideo();
+  if (v && v.duration) v.currentTime = pct * v.duration;
+  document.getElementById('preview-bar-fill').style.width = pct * 100 + '%';
 }
 
-function onTimeUpdate(){
-  const v=getActiveVideo();
-  if(v.duration){
-    document.getElementById('preview-bar-fill').style.width=(v.currentTime/v.duration*100)+'%';
+// ==================== 发表与上传状态 ====================
+async function startUpload() {
+  if (!currentAccount) { toast('请先选择账号'); return; }
+  const st = accountStates[currentAccount];
+  if (!st.videoQueue.length) { toast('请添加视频'); return; }
+
+  saveCurrentForm();
+  const f = st.form;
+
+  const payload = {
+    videos: st.videoQueue.map(v => ({
+      video_path: v.path,
+      title: f.title,
+      description: f.desc,
+      short_drama_name: f.drama,
+      publish_time: '',
+      cover_path: st.coverPath,
+      location: 'none',
+    })),
+    interval_min: f.interval,
+  };
+
+  const res = await fetch('/api/accounts/' + encodeURIComponent(currentAccount) + '/upload/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  if (data.error) { toast(data.error); return; }
+
+  st.running = true;
+  st.status = '等待中...';
+  st.progress = 0;
+  st.logs = [];
+
+  showUploadBar(true);
+  renderSidebar();
+  startStatusPolling(currentAccount);
+}
+
+function startStatusPolling(accountName) {
+  if (_statusPollTimer) clearTimeout(_statusPollTimer);
+  _pollStatus(accountName);
+}
+
+async function _pollStatus(accountName) {
+  try {
+    const res = await fetch('/api/accounts/' + encodeURIComponent(accountName) + '/upload/status');
+    const st = await res.json();
+    const local = accountStates[accountName];
+    if (!local) return;
+
+    local.status = st.status || '';
+    local.progress = st.progress || 0;
+    local.logs = st.logs || [];
+    local.running = st.running;
+
+    if (currentAccount === accountName) {
+      updateUploadBar(local);
+    }
+
+    // Update queue item statuses
+    if (st.queue) {
+      st.queue.forEach((qs, i) => {
+        if (local.videoQueue[i]) {
+          local.videoQueue[i].status = qs.status === 'published' ? 'done' : (qs.status === 'failed' ? 'fail' : '');
+        }
+      });
+      if (currentAccount === accountName) renderQueueForAccount();
+    }
+
+    if (!st.running) {
+      local.running = false;
+      local.status = st.status;
+      if (currentAccount === accountName) showUploadBar(false);
+      _statusPollTimer = null;
+    } else {
+      _statusPollTimer = setTimeout(() => _pollStatus(accountName), 1000);
+    }
+  } catch (e) {
+    _statusPollTimer = setTimeout(() => _pollStatus(accountName), 3000);
   }
-}
-function onEnded(){document.getElementById('preview-play-btn').textContent='▶'}
-
-function togglePreviewPlay(){
-  const v=getActiveVideo();
-  if(v.paused){v.play();document.getElementById('preview-play-btn').textContent='⏸'}
-  else{v.pause();document.getElementById('preview-play-btn').textContent='▶'}
+  renderSidebar();
 }
 
-function seekPreview(e){
-  const bar=document.getElementById('preview-bar');
-  const rect=bar.getBoundingClientRect();
-  const pct=(e.clientX-rect.left)/rect.width;
-  const v=getActiveVideo();
-  if(v.duration)v.currentTime=pct*v.duration;
-  document.getElementById('preview-bar-fill').style.width=pct*100+'%';
+function updateUploadBar(st) {
+  document.getElementById('upload-status-text').textContent = st.status || '';
+  document.getElementById('upload-status-pct').textContent = Math.round(st.progress || 0) + '%';
+  document.getElementById('upload-status-fill').style.width = (st.progress || 0) + '%';
+  document.getElementById('upload-status-logs').textContent = (st.logs || []).slice(-8).join('\n');
 }
 
-function updateQueueStatus(i){
-  // 只更新第 i 个卡片的状态标签，不重建 DOM
-  const card=document.getElementById('qc-'+i);
-  if(!card)return;
-  const oldBadge=card.querySelector('.qc-status');
-  if(oldBadge)oldBadge.remove();
-  const v=videoQueue[i];
-  if(v.status==='done'||v.status==='fail'){
-    const cls=v.status==='done'?'done':'fail';
-    const badge=document.createElement('div');
-    badge.className='qc-status '+cls;
-    badge.textContent=v.status==='done'?'✓':'✗';
-    card.appendChild(badge);
-  }
+function showUploadBar(show) {
+  document.getElementById('upload-status-bar').style.display = show ? '' : 'none';
+  document.getElementById('btn-publish').style.display = show ? 'none' : '';
+  document.getElementById('btn-cancel-upload').style.display = show ? '' : 'none';
+  document.getElementById('btn-skip-current').style.display = show ? '' : 'none';
 }
+
+async function cancelUpload() {
+  if (!currentAccount) return;
+  await fetch('/api/accounts/' + encodeURIComponent(currentAccount) + '/upload/cancel', { method: 'POST' });
+  accountStates[currentAccount].running = false;
+  accountStates[currentAccount].status = '已取消';
+  showUploadBar(false);
+  renderSidebar();
+  toast('已取消');
+}
+
+async function skipCurrentVideo() {
+  if (!currentAccount) return;
+  const res = await fetch('/api/accounts/' + encodeURIComponent(currentAccount) + '/upload/skip', { method: 'POST' });
+  const data = await res.json();
+  if (data.message) toast(data.message);
+}
+
+// ==================== 全局账号状态轮询 ====================
+function startAllAccountsPolling() {
+  if (_allPollTimer) return;
+  _pollAllAccounts();
+}
+
+async function _pollAllAccounts() {
+  try {
+    const res = await fetch('/api/upload/status/all');
+    const data = await res.json();
+    for (const [name, st] of Object.entries(data)) {
+      if (!accountStates[name]) initAccountState(name);
+      accountStates[name].running = st.running;
+      accountStates[name].status = st.status || accountStates[name].status;
+      accountStates[name].progress = st.progress || 0;
+    }
+    renderSidebar();
+  } catch (e) { /* ignore */ }
+  _allPollTimer = setTimeout(_pollAllAccounts, 3000);
+}
+startAllAccountsPolling();
 
 // ==================== 定时 ====================
-function toggleSchedule(){document.getElementById('form-time').style.display=document.querySelector('input[name=schedule]:checked').value==='scheduled'?'block':'none'}
+function toggleSchedule() {
+  const el = document.getElementById('form-time');
+  const radio = document.querySelector('input[name=schedule]:checked');
+  if (el && radio) el.style.display = radio.value === 'scheduled' ? 'block' : 'none';
+}
 
-// ==================== 自定义下拉 ====================
-function refreshCustSelect(){
-  const dropdown=document.getElementById('account-select-dropdown');
-  const sel=document.getElementById('account-select');
-  const cur=sel.value;
-  const options=Array.from(sel.options);
-  dropdown.innerHTML=options.map(o=>`<div class="cust-option${o.value===cur?' selected':''}" onclick="selectCustOption('${esc(o.value)}')">${o.text}</div>`).join('');
-  document.querySelector('.cust-text').textContent=options.find(o=>o.selected)?.text||'选择账号…';
+// ==================== 账号管理模态框 ====================
+function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;'); }
+
+function refreshAccountTable() {
+  const tbody = document.getElementById('acct-tbody');
+  const empty = document.getElementById('acct-empty');
+  if (!tbody) return;
+  if (!accounts.length) { tbody.innerHTML = ''; if (empty) empty.style.display = ''; return; }
+  if (empty) empty.style.display = 'none';
+  tbody.innerHTML = accounts.map(a => '<tr>'
+    + '<td>' + esc(a.nickname || '') + '</td>'
+    + '<td>' + esc(a.last_login || '未登录') + '</td>'
+    + '<td><div class="acct-actions">'
+    + (a.last_login
+        ? '<button class="btn-sm btn-mgmt" onclick="openDashboard(\'' + esc(a.name) + '\')">后台</button>'
+        : '<button class="btn-sm btn-mgmt" onclick="loginAccount(\'' + esc(a.name) + '\')">登录</button>')
+    + '<button class="btn-sm btn-danger" onclick="deleteAccount(\'' + esc(a.name) + '\')">删除</button>'
+    + '</div></td></tr>').join('');
 }
-function toggleCustSelect(){
-  const trigger=document.getElementById('account-select-trigger');
-  const dropdown=document.getElementById('account-select-dropdown');
-  const open=dropdown.classList.toggle('show');
-  trigger.classList.toggle('open',open);
+
+function openAccountManager() {
+  document.getElementById('acct-overlay').classList.add('show');
+  refreshAccountTable();
 }
-function selectCustOption(val){
-  document.getElementById('account-select').value=val;
-  refreshCustSelect();
-  document.getElementById('account-select-trigger').classList.remove('open');
-  document.getElementById('account-select-dropdown').classList.remove('show');
+function closeAccountManager() {
+  document.getElementById('acct-overlay').classList.remove('show');
 }
-document.addEventListener('click',e=>{
-  const wrap=document.getElementById('account-select-wrap');
-  if(wrap&&!wrap.contains(e.target)){
-    document.getElementById('account-select-trigger').classList.remove('open');
-    document.getElementById('account-select-dropdown').classList.remove('show');
+
+// ==================== 二维码 ====================
+let qrcodeTimer = null;
+function openQrcodeModal() {
+  document.getElementById('qrcode-overlay').classList.add('show');
+  document.getElementById('qrcode-img').style.display = 'none';
+  document.getElementById('qrcode-spinner').style.display = '';
+  document.getElementById('qrcode-status-text').textContent = '正在获取二维码...';
+}
+function closeQrcodeModal() {
+  document.getElementById('qrcode-overlay').classList.remove('show');
+  if (qrcodeTimer) { clearTimeout(qrcodeTimer); qrcodeTimer = null; }
+}
+async function cancelScan() {
+  await fetch('/api/accounts/add-with-scan/cancel', { method: 'POST' });
+  closeQrcodeModal();
+}
+async function addAccount() {
+  openQrcodeModal();
+  const res = await fetch('/api/accounts/add-with-scan', { method: 'POST' });
+  const data = await res.json();
+  if (data.error) { document.getElementById('qrcode-status-text').textContent = data.error; setTimeout(closeQrcodeModal, 2000); return; }
+  pollQrcodeStatus();
+}
+const _qrcodeStatusMap = {
+  loading: '正在获取二维码...',
+  waiting: '请使用微信扫描二维码',
+  scanned: '请使用微信扫描二维码',
+  confirming: '请使用微信扫描二维码',
+  expired: '二维码已过期，正在刷新...',
+  logged_in: '登录成功！',
+  timeout: '登录超时',
+  cancelled: '已取消',
+};
+async function pollQrcodeStatus() {
+  const sr = await fetch('/api/accounts/add-with-scan/status');
+  const st = await sr.json();
+  const img = document.getElementById('qrcode-img');
+  const spinner = document.getElementById('qrcode-spinner');
+  const statusText = document.getElementById('qrcode-status-text');
+  if (st.qrcode) { img.src = st.qrcode; img.style.display = ''; spinner.style.display = 'none'; }
+  statusText.textContent = _qrcodeStatusMap[st.status] || st.status;
+  if (!st.scanning) {
+    spinner.style.display = 'none';
+    if (st.result && st.result.success) { await loadAccounts(); setTimeout(closeQrcodeModal, 1500); }
+    else { setTimeout(closeQrcodeModal, 3000); }
+    return;
   }
-});
-
-// ==================== 发表 ====================
-async function startUpload(){
-  const account=document.getElementById('account-select').value;
-  const title=document.getElementById('form-title').value.trim();
-  const desc=document.getElementById('form-desc').value.trim();
-  const drama=document.getElementById('form-drama').value.trim();
-  const sched=document.querySelector('input[name=schedule]:checked').value==='scheduled';
-  const startTimeVal=sched?document.getElementById('form-time').value:'';
-  const intervalMin=parseInt(document.getElementById('form-interval').value)||0;
-
-  if(!account){toast('请选择账号');return}
-  if(!videoQueue.length){toast('请添加视频');return}
-
-  const overlay=document.getElementById('overlay');overlay.classList.add('show');
-  document.getElementById('spinner').style.display='block';
-  document.getElementById('log-text').textContent='';
-
-  // 定时发表由后端处理
-
-  for(let i=0;i<videoQueue.length;i++){
-    const v=videoQueue[i];
-    document.getElementById('status-text').textContent=`上传中 (${i+1}/${videoQueue.length})`;
-    document.getElementById('progress-text').textContent=v.name;
-
-    const res=await fetch('/api/upload',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({account,video_path:v.path,title,description:desc,cover_path:currentCoverPath,short_drama_name:drama,publish_time:'',location:'none',start_at:startTimeVal})});
-    const data=await res.json();
-    if(data.error){v.status='fail';document.getElementById('log-text').textContent+=`\n[失败] ${v.name}`}
-    else{
-      let done=false,st=null,t0=Date.now();
-      while(!done){await new Promise(r=>setTimeout(r,3000));let sr;try{sr=await fetch('/api/upload/status');st=await sr.json()}catch(e){continue}document.getElementById('status-text').textContent=st.status;let pct=st.progress||0;if(Date.now()-t0>1000&&pct<1)pct=1;document.getElementById('progress-fill').style.width=pct+'%';document.getElementById('progress-pct').textContent=Math.round(pct)+'%';if(st.status==='已取消'||st.cancelled)break;done=!st.running}
-      if(st&&st.cancelled){document.getElementById('log-text').textContent+=`\n[取消] ${v.name}`;break}
-	      v.status=st&&st.result&&st.result.status==='published'?'done':'fail';
-      document.getElementById('log-text').textContent+=`\n[${v.status==='done'?'成功':'失败'}] ${v.name}`;
-    }
-    updateQueueStatus(i);
-	    if(intervalMin>0&&i<videoQueue.length-1){document.getElementById('status-text').textContent=`等待间隔 ${intervalMin} 分钟...`;await new Promise(r=>setTimeout(r,intervalMin*60000))}
-	  }
-  document.getElementById('progress-fill').style.width='100%';
-  document.getElementById('status-text').textContent='全部完成';
-  document.getElementById('spinner').style.display='none';
-  // 完成后保留队列，卡片徽章标示结果
-  setTimeout(()=>overlay.classList.remove('show'),3000);
+  qrcodeTimer = setTimeout(pollQrcodeStatus, 1000);
 }
 
-function toast(msg){const t=document.createElement('div');t.className='toast';t.textContent=msg;document.body.appendChild(t);setTimeout(()=>t.remove(),3000)}
-
-async function cancelUpload(){
-  await fetch('/api/upload/cancel',{method:'POST'});
+async function deleteAccount(name) {
+  if (!confirm('确定删除账号 ' + name + '？此操作不删除浏览器数据。')) return;
+  await fetch('/api/accounts/' + encodeURIComponent(name), { method: 'DELETE' });
+  await loadAccounts();
+  toast('已删除');
+}
+async function openDashboard(name) {
+  const res = await fetch('/api/accounts/' + encodeURIComponent(name) + '/dashboard', { method: 'POST' });
+  const data = await res.json();
+  if (data.error) { toast(data.error); return; }
+  toast('后台打开中');
+}
+async function loginAccount(name) {
+  const res = await fetch('/api/accounts/' + encodeURIComponent(name) + '/login', { method: 'POST' });
+  const data = await res.json();
+  if (data.error) { toast(data.error); return; }
+  toast('网页打开中，请稍等');
+  let lastSeen = null;
+  for (let i = 0; i < 60; i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    await loadAccounts();
+    const acct = accounts.find(a => a.name === name);
+    const cur = acct ? acct.last_login : '';
+    if (cur && cur !== lastSeen) { lastSeen = cur; refreshAccountTable(); }
+    if (cur && cur !== '') break;
+  }
 }
 
-let debugMode=false;
-async function toggleDebug(){
-  debugMode=!debugMode;
-  const el=document.getElementById('debug-toggle');
-  el.classList.toggle('active',debugMode);
-  el.textContent=debugMode?'debug on':'debug';
-  await fetch('/api/debug',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({debug:debugMode})});
+// ==================== 通用 ====================
+function toast(msg) {
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3000);
 }
-(async()=>{
-  const r=await fetch('/api/debug');const d=await r.json();
-  debugMode=d.debug;
-  const el=document.getElementById('debug-toggle');
-  if(debugMode)el.classList.add('active');
-  el.textContent=debugMode?'debug on':'debug';
+
+let debugMode = false;
+async function toggleDebug() {
+  debugMode = !debugMode;
+  const el = document.getElementById('debug-toggle');
+  if (el) { el.classList.toggle('active', debugMode); el.textContent = debugMode ? 'debug on' : 'debug'; }
+  await fetch('/api/debug', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ debug: debugMode }) });
+}
+(async () => {
+  const r = await fetch('/api/debug');
+  const d = await r.json();
+  debugMode = d.debug;
+  const el = document.getElementById('debug-toggle');
+  if (el) { if (debugMode) el.classList.add('active'); el.textContent = debugMode ? 'debug on' : 'debug'; }
 })();
+
 // ==================== 暗色模式 ====================
-(function initTheme(){
-  const saved=localStorage.getItem('theme');
-  const prefers=window.matchMedia('(prefers-color-scheme:dark)').matches;
-  if(saved==='dark'||(!saved&&prefers))document.documentElement.setAttribute('data-theme','dark');
+(function initTheme() {
+  const saved = localStorage.getItem('theme');
+  const prefers = window.matchMedia('(prefers-color-scheme:dark)').matches;
+  if (saved === 'dark' || (!saved && prefers)) document.documentElement.setAttribute('data-theme', 'dark');
   updateThemeIcon();
 })();
-function toggleTheme(){
-  const el=document.documentElement;
-  if(el.hasAttribute('data-theme')){el.removeAttribute('data-theme');localStorage.setItem('theme','light')}
-  else{el.setAttribute('data-theme','dark');localStorage.setItem('theme','dark')}
+function toggleTheme() {
+  const el = document.documentElement;
+  if (el.hasAttribute('data-theme')) { el.removeAttribute('data-theme'); localStorage.setItem('theme', 'light'); }
+  else { el.setAttribute('data-theme', 'dark'); localStorage.setItem('theme', 'dark'); }
   updateThemeIcon();
 }
-function updateThemeIcon(){
-  document.getElementById('theme-toggle').textContent=document.documentElement.hasAttribute('data-theme')?'☀️':'🌙';
+function updateThemeIcon() {
+  document.getElementById('theme-toggle').textContent = document.documentElement.hasAttribute('data-theme') ? '☀️' : '🌙';
 }
 </script>
+
 <div class="debug-toggle" id="debug-toggle" onclick="toggleDebug()" title="切换有头/无头浏览器">debug</div>
 </body>
 </html>
