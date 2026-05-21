@@ -6,7 +6,7 @@
 <title>视频号上传</title>
 <style>
   :root {
-    --green: #07c160; --green-hover: #06ad50; --red: #e74c3c;
+    --green: #07c160; --green-hover: #06ad50; --red: #e74c3c; --blue: #1677ff;
     --bg: #f0f2f5; --card: #fff; --text: #1a1a1a; --text2: #888;
     --border: #e5e5e5; --shadow: 0 1px 3px rgba(0,0,0,.06); --radius: 8px;
     --label: #555; --hover-bg: #f0faf4; --bar-track: #e9ecef;
@@ -14,7 +14,7 @@
     --badge-fail-bg: #f8d7da; --badge-fail-text: #721c24;
   }
   [data-theme="dark"] {
-    --bg: #1a1a1c; --card: #2a2a2d; --text: #e0e0e0; --text2: #999;
+    --bg: #1a1a1c; --card: #2a2a2d; --text: #e0e0e0; --text2: #999; --blue: #4096ff;
     --border: #3a3a3d; --shadow: 0 1px 3px rgba(0,0,0,.4);
     --label: #aaa; --hover-bg: #1a3a1a; --bar-track: #3a3a3d;
     --overlay-bg: rgba(0,0,0,.6); --badge-done-bg: #1a3a1a; --badge-done-text: #7ddf90;
@@ -247,7 +247,8 @@
       <button class="modal-close" onclick="closeAccountManager()">✕</button>
     </div>
     <div class="acct-add-form">
-      <button class="btn-sm btn-full" style="background:var(--green);color:#fff;padding:10px;font-size:14px" onclick="addAccount()">添加账号（扫码自动获取昵称）</button>
+      <button class="btn-sm" style="flex:1;background:var(--green);color:#fff;padding:10px;font-size:14px" onclick="addAccount()">添加账号</button>
+      <button class="btn-sm" id="check-btn" style="flex:1;background:var(--blue);color:#fff;padding:10px;font-size:14px" onclick="checkAccounts()">检测</button>
     </div>
     <table class="acct-table">
       <thead><tr><th>昵称</th><th>最后登录</th><th>操作</th></tr></thead>
@@ -923,21 +924,28 @@ function toggleSchedule() {
 // ==================== 账号管理模态框 ====================
 function esc(s) { return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;'); }
 
-function refreshAccountTable() {
+function refreshAccountTable(results) {
   const tbody = document.getElementById('acct-tbody');
   const empty = document.getElementById('acct-empty');
   if (!tbody) return;
   if (!accounts.length) { tbody.innerHTML = ''; if (empty) empty.style.display = ''; return; }
   if (empty) empty.style.display = 'none';
-  tbody.innerHTML = accounts.map(a => '<tr>'
-    + '<td>' + esc(a.nickname || '') + '</td>'
-    + '<td>' + esc(a.last_login || '未登录') + '</td>'
-    + '<td><div class="acct-actions">'
-    + (a.last_login
-        ? '<button class="btn-sm btn-mgmt" onclick="openDashboard(\'' + esc(a.name) + '\')">后台</button>'
-        : '<button class="btn-sm btn-mgmt" onclick="loginAccount(\'' + esc(a.name) + '\')">登录</button>')
-    + '<button class="btn-sm btn-danger" onclick="deleteAccount(\'' + esc(a.name) + '\')">删除</button>'
-    + '</div></td></tr>').join('');
+  tbody.innerHTML = accounts.map(a => {
+    let loginCell = esc(a.last_login || '未登录');
+    if (results && results.hasOwnProperty(a.name)) {
+      const ok = results[a.name];
+      loginCell += ' <span style="color:' + (ok ? 'var(--green)' : 'var(--red)') + ';font-weight:bold">' + (ok ? '✓' : '✗') + '</span>';
+    }
+    return '<tr>'
+      + '<td>' + esc(a.nickname || '') + '</td>'
+      + '<td>' + loginCell + '</td>'
+      + '<td><div class="acct-actions">'
+      + (a.last_login
+          ? '<button class="btn-sm btn-mgmt" onclick="openDashboard(\'' + esc(a.name) + '\')">后台</button>'
+          : '<button class="btn-sm btn-mgmt" onclick="loginAccount(\'' + esc(a.name) + '\')">登录</button>')
+      + '<button class="btn-sm btn-danger" onclick="deleteAccount(\'' + esc(a.name) + '\')">删除</button>'
+      + '</div></td></tr>';
+  }).join('');
 }
 
 function openAccountManager() {
@@ -946,6 +954,46 @@ function openAccountManager() {
 }
 function closeAccountManager() {
   document.getElementById('acct-overlay').classList.remove('show');
+  if (_checkPollTimer) { clearTimeout(_checkPollTimer); _checkPollTimer = null; }
+}
+
+let _checkPollTimer = null;
+async function checkAccounts() {
+  const btn = document.getElementById('check-btn');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = '检测中...';
+  try {
+    const res = await fetch('/api/accounts/check', { method: 'POST' });
+    const data = await res.json();
+    if (res.status === 409) { toast(data.error || '检测进行中'); return; }
+    if (res.status === 200) { toast(data.message || '无已登录账号'); return; }
+    if (res.status !== 202) { toast('检测启动失败'); return; }
+
+    function poll() {
+      _checkPollTimer = setTimeout(async () => {
+        try {
+          const sr = await fetch('/api/accounts/check/status');
+          const st = await sr.json();
+          refreshAccountTable(st.results);
+          if (st.done) {
+            await loadAccounts();
+            refreshAccountTable(null);
+            renderSidebar();
+            toast('检测完成');
+            return;
+          }
+          poll();
+        } catch (e) { /* retry */ poll(); }
+      }, 1500);
+    }
+    poll();
+  } catch (e) {
+    toast('检测请求失败');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '检测';
+  }
 }
 
 // ==================== 二维码 ====================
