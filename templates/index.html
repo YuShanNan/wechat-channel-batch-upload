@@ -160,6 +160,17 @@
   .qrcode-close{position:absolute;top:12px;right:12px;background:none;border:none;font-size:20px;color:var(--text2);cursor:pointer;line-height:1}
   .qrcode-close:hover{color:var(--text)}
 
+  /* close-confirm dialog */
+  .close-overlay{display:none;position:fixed;inset:0;background:var(--overlay-bg);z-index:200;align-items:center;justify-content:center}
+  .close-overlay.show{display:flex}
+  .close-modal{background:var(--card);border-radius:12px;padding:24px;text-align:center;max-width:300px;width:90%}
+  .close-modal p{font-size:14px;color:var(--text);margin:0 0 16px}
+  .close-modal .btn-row{display:flex;gap:8px}
+  .close-modal .btn-row button{flex:1;padding:8px;border:none;border-radius:6px;font-size:13px;font-weight:500;cursor:pointer;font-family:inherit}
+  .close-modal .btn-tray{background:var(--green);color:#fff}
+  .close-modal .btn-exit{background:var(--border);color:var(--label)}
+  .close-modal .btn-cancel{background:transparent;color:var(--text2)}
+
   /* 表单统一 */
   input[type="datetime-local"],input[type="number"]{padding:10px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px;font-family:inherit;outline:none;width:100%;transition:border-color .2s;background:var(--card);color:var(--text)}
   input[type="datetime-local"]:focus,input[type="number"]:focus{border-color:var(--green)}
@@ -233,6 +244,17 @@
   </div>
 </div>
 
+<div class="close-overlay" id="close-overlay">
+  <div class="close-modal">
+    <p>关闭窗口后你想做什么？</p>
+    <div class="btn-row">
+      <button class="btn-tray" onclick="closeToTray()">退到后台</button>
+      <button class="btn-exit" onclick="closeAndExit()">退出程序</button>
+    </div>
+    <button class="btn-cancel" style="margin-top:8px;width:100%" onclick="cancelClose()">取消</button>
+  </div>
+</div>
+
 <div class="qrcode-overlay" id="qrcode-overlay">
   <div class="qrcode-modal">
     <button class="qrcode-close" onclick="cancelScan()">✕</button>
@@ -247,15 +269,28 @@
 
 
 <script>
-// ==================== 安全措施 ====================
+// ==================== 关闭确认 ====================
 window.addEventListener('beforeunload', (e) => {
-  const hasRunning = Object.values(accountStates).some(s => s.running);
-  if (hasRunning) {
-    e.preventDefault();
-    e.returnValue = '有上传任务正在进行中，确定要离开吗？';
-    return e.returnValue;
-  }
+  e.preventDefault();
+  document.getElementById('close-overlay').classList.add('show');
+  window._closePrevented = true;
 });
+let _closePrevented = false;
+function closeToTray() {
+  _closePrevented = false;
+  document.getElementById('close-overlay').classList.remove('show');
+  fetch('/api/window/minimize', { method: 'POST' });
+}
+function closeAndExit() {
+  _closePrevented = false;
+  const hasRunning = Object.values(accountStates).some(s => s.running);
+  if (hasRunning && !confirm('有上传任务正在进行中，确定要退出吗？')) return;
+  document.getElementById('close-overlay').classList.remove('show');
+  fetch('/api/window/exit', { method: 'POST' });
+}
+function cancelClose() {
+  document.getElementById('close-overlay').classList.remove('show');
+}
 document.addEventListener('contextmenu', e => e.preventDefault());
 
 // ==================== 状态模型 ====================

@@ -104,23 +104,28 @@ def main():
             ),
         )
 
-        # Override window close: ask user to minimize or exit
+        # Override window close: always minimize, frontend shows choice dialog
         def _on_closing():
-            import ctypes
-            result = ctypes.windll.user32.MessageBoxW(
-                0,
-                "关闭窗口后你想做什么？",
-                "视频号上传",
-                0x00000003 | 0x00000020,  # MB_YESNOCANCEL | MB_ICONQUESTION
-            )
-            if result == 6:  # IDYES — 退到后台
-                window.hide()
-            elif result == 7:  # IDNO — 退出程序
-                on_tray_exit(None, None)
-            # IDCANCEL (2) — 取消，什么都不做
+            window.hide()
             return False
 
         window.events.closing += _on_closing
+
+        # Expose window control to frontend
+        @app.route("/api/window/exit", methods=["POST"])
+        def api_window_exit():
+            on_tray_exit(None, None)
+            return {"ok": True}
+
+        @app.route("/api/window/minimize", methods=["POST"])
+        def api_window_minimize():
+            window.hide()
+            return {"ok": True}
+
+        @app.route("/api/window/show", methods=["POST"])
+        def api_window_show():
+            window.show()
+            return {"ok": True}
 
         # Run tray in daemon thread so it doesn't block webview.start()
         threading.Thread(target=tray_icon.run, daemon=True).start()
