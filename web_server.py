@@ -140,6 +140,13 @@ atexit.register(_cleanup_uploaders)
 async def _async_set_event(ev: asyncio.Event):
     ev.set()
 
+def _resolve_executable_path(headless: bool) -> str:
+    """有头模式时查找系统浏览器路径；未找到返回空串"""
+    if headless:
+        return ""
+    return WeChatUploader.find_system_browser()
+
+
 async def _run_account_upload(account_name: str, profile_dir: Path, headless: bool):
     """Process the full video queue for one account, respecting cancel/skip/semaphore."""
     state = _get_or_create_account_state(account_name)
@@ -173,7 +180,13 @@ async def _run_account_upload(account_name: str, profile_dir: Path, headless: bo
                     uploader = None
 
             if uploader is None:
-                uploader = WeChatUploader(profile_dir, headless=headless)
+                exe_path = _resolve_executable_path(headless)
+                if not headless and not exe_path:
+                    state["status"] = "缺少浏览器"
+                    _add_log(account_name, "有头模式需要系统浏览器(Chrome/Edge)，未找到，请安装 Chrome")
+                    state["running"] = False
+                    return
+                uploader = WeChatUploader(profile_dir, headless=headless, executable_path=exe_path)
                 await uploader.start()
                 if cancel_ev.is_set():
                     await uploader.close()
@@ -338,9 +351,13 @@ def api_open_dashboard(name):
     if not profile_dir:
         return jsonify({"error": f"账号 {name} 不存在"}), 404
 
+    exe_path = _resolve_executable_path(False)
+    if not exe_path:
+        return jsonify({"error": "有头模式需要系统浏览器(Chrome/Edge)，未找到，请安装 Chrome"}), 400
+
     def do_open():
         async def _open():
-            uploader = WeChatUploader(profile_dir, headless=False)
+            uploader = WeChatUploader(profile_dir, headless=False, executable_path=exe_path)
             try:
                 await uploader.start()
                 page = await uploader._context.new_page()
@@ -359,9 +376,13 @@ def api_login_account(name):
     if not profile_dir:
         return jsonify({"error": f"账号 {name} 不存在"}), 404
 
+    exe_path = _resolve_executable_path(False)
+    if not exe_path:
+        return jsonify({"error": "有头模式需要系统浏览器(Chrome/Edge)，未找到，请安装 Chrome"}), 400
+
     def do_login():
         async def _login():
-            uploader = WeChatUploader(profile_dir, headless=False)
+            uploader = WeChatUploader(profile_dir, headless=False, executable_path=exe_path)
             try:
                 await uploader.start()
                 success = await uploader.ensure_login(timeout_seconds=180)

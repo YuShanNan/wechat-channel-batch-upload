@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import os
 import re
 import shutil
 import subprocess
@@ -58,12 +59,27 @@ class WeChatUploader:
     每个实例绑定一个账号 profile 目录
     """
 
-    def __init__(self, profile_dir: Path, headless: bool = True):
+    def __init__(self, profile_dir: Path, headless: bool = True, executable_path: str = ""):
         self.profile_dir = Path(profile_dir)
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         self.headless = headless
+        self._executable_path = executable_path
         self._context: Optional[BrowserContext] = None
         self._upload_progress = 0
+
+    @staticmethod
+    def find_system_browser() -> str:
+        """在 Windows 上查找系统 Chrome/Edge 路径，用于有头模式。返回空串表示未找到。"""
+        candidates = [
+            os.path.expandvars(r"%PROGRAMFILES%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe"),
+            os.path.expandvars(r"%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe"),
+            os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"),
+        ]
+        for p in candidates:
+            if os.path.isfile(p):
+                return p
+        return ""
 
     async def start(self):
         """启动浏览器。headless=True 时用 --headless=new 避免任务栏图标。"""
@@ -81,13 +97,16 @@ class WeChatUploader:
         if not self.headless:
             args.extend(["--window-position=100,100", "--window-size=1200,800"])
             self._reset_window_state()
-        self._context = await pw.chromium.launch_persistent_context(
+        kwargs = dict(
             user_data_dir=str(self.profile_dir),
             headless=self.headless,
             viewport={"width": 1440, "height": 900},
             locale="zh-CN",
             args=args,
         )
+        if self._executable_path:
+            kwargs["executable_path"] = self._executable_path
+        self._context = await pw.chromium.launch_persistent_context(**kwargs)
         await self._context.add_init_script("""
             Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
             Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});

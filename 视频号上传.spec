@@ -4,7 +4,6 @@
 import os as _os
 _msroot = _os.path.expandvars(r'%LOCALAPPDATA%\ms-playwright')
 _ms_browsers = [
-    (_msroot + '/chromium-1208', 'ms-playwright/chromium-1208'),
     (_msroot + '/chromium_headless_shell-1208', 'ms-playwright/chromium_headless_shell-1208'),
     (_msroot + '/ffmpeg-1011', 'ms-playwright/ffmpeg-1011'),
     (_msroot + '/winldd-1007', 'ms-playwright/winldd-1007'),
