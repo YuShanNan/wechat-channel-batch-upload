@@ -752,7 +752,7 @@ async function startUpload() {
       title: f.title,
       description: f.desc,
       short_drama_name: f.drama,
-      publish_time: '',
+      publish_time: f.schedule === 'scheduled' ? (f.time || '') : '',
       cover_path: st.coverPath,
       location: 'none',
     })),
@@ -1024,7 +1024,10 @@ async function pollQrcodeStatus() {
 async function deleteAccount(name) {
   if (!confirm('确定删除账号 ' + name + '？此操作不删除浏览器数据。')) return;
   await fetch('/api/accounts/' + encodeURIComponent(name), { method: 'DELETE' });
+  if (currentAccount === name) currentAccount = '';
   await loadAccounts();
+  renderSidebar();
+  renderMainContent();
   toast('已删除');
 }
 async function openDashboard(name) {
@@ -1045,8 +1048,9 @@ async function loginAccount(name) {
     const acct = accounts.find(a => a.name === name);
     const cur = acct ? acct.last_login : '';
     if (cur && cur !== lastSeen) { lastSeen = cur; refreshAccountTable(); }
-    if (cur && cur !== '') break;
+    if (cur && cur !== '') { toast('登录成功'); break; }
   }
+  if (!lastSeen) toast('登录超时，请重试');
 }
 
 // ==================== 通用 ====================
