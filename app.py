@@ -50,7 +50,64 @@ def main():
     wait_for_flask()
 
     import webview
-    webview.create_window("视频号上传", URL, width=1100, height=850, resizable=True, text_select=True)
+    window = webview.create_window("视频号上传", URL, width=1100, height=850, resizable=True, text_select=True)
+
+    # ---- Tray ----
+    try:
+        from PIL import Image, ImageDraw
+        import pystray
+
+        # Generate icon (32x32 green circle with 微 character)
+        icon_img = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(icon_img)
+        draw.ellipse([2, 2, 30, 30], fill=(7, 193, 96))
+        draw.text((8, 6), "微", fill=(255, 255, 255))
+
+        def on_tray_show(icon, item):
+            window.show()
+
+        def on_tray_exit(icon, item):
+            # Check if uploads are running
+            try:
+                import urllib.request as _req
+                import json as _json
+                resp = _req.urlopen(f"{URL}/api/upload/status/all", timeout=2)
+                data = _json.loads(resp.read())
+                running = any(v.get("running") for v in data.values())
+            except Exception:
+                running = False
+
+            if running:
+                import ctypes
+                result = ctypes.windll.user32.MessageBoxW(0,
+                    "有上传任务正在进行中，确定要退出吗？", "视频号上传", 1)  # MB_OKCANCEL
+                if result != 1:  # IDOK
+                    return
+
+            icon.stop()
+            window.destroy()
+            os._exit(0)
+
+        tray_icon = pystray.Icon(
+            "wechat_uploader",
+            icon_img,
+            "视频号上传",
+            menu=pystray.Menu(
+                pystray.MenuItem("显示窗口", on_tray_show, default=True),
+                pystray.MenuItem("退出", on_tray_exit),
+            ),
+        )
+
+        # Override window close to minimize to tray instead of closing
+        window.events.closing = lambda: (window.hide(), False)
+
+        # Run tray in daemon thread so it doesn't block webview.start()
+        threading.Thread(target=tray_icon.run, daemon=True).start()
+
+    except ImportError:
+        pass  # tray is optional, skip if pystray/Pillow not installed
+    # ---- End Tray ----
+
     webview.start()
 
 
