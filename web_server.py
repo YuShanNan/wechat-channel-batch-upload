@@ -220,16 +220,30 @@ async def _run_account_upload(account_name: str, profile_dir: Path, headless: bo
                 _add_log(account_name, f"[开始] {title}")
 
                 state["_current_uploader"] = uploader
-                uploader._upload_progress = 0
-                result = await uploader.upload_single(
-                    video_path=video["video_path"],
-                    title=title,
-                    description=video.get("description", ""),
-                    cover_path=video.get("cover_path", ""),
-                    short_drama_name=video.get("short_drama_name", ""),
-                    publish_time=video.get("publish_time", ""),
-                    location=video.get("location", "none"),
-                )
+                max_retries = 3
+                result = {"status": WeChatUploader.STATUS_UNKNOWN}
+                for retry in range(max_retries + 1):
+                    if cancel_ev.is_set() or skip_ev.is_set():
+                        break
+
+                    uploader._upload_progress = 0
+
+                    if retry > 0:
+                        state["status"] = f"重试中 ({retry}/{max_retries})…"
+                        _add_log(account_name, f"[重试] {title} ({retry}/{max_retries})")
+
+                    result = await uploader.upload_single(
+                        video_path=video["video_path"],
+                        title=title,
+                        description=video.get("description", ""),
+                        cover_path=video.get("cover_path", ""),
+                        short_drama_name=video.get("short_drama_name", ""),
+                        publish_time=video.get("publish_time", ""),
+                        location=video.get("location", "none"),
+                    )
+
+                    if result.get("status") == WeChatUploader.STATUS_PUBLISHED:
+                        break
 
                 if skip_ev.is_set():
                     skip_ev.clear()
