@@ -57,15 +57,14 @@ def main():
         from PIL import Image, ImageDraw
         import pystray
 
-        # Load tray icon (try bundled ICO, fall back to generated icon)
-        try:
-            icon_path = (Path(sys._MEIPASS) / "icon.ico") if hasattr(sys, '_MEIPASS') else (Path(__file__).parent / "icon.ico")
-            icon_img = Image.open(icon_path)
-        except Exception:
+        # Tray icon: try bundled ICO, fall back to generated icon
+        icon_path = (Path(sys._MEIPASS) / "icon.ico") if hasattr(sys, '_MEIPASS') else (Path(__file__).parent / "icon.ico")
+        if icon_path.exists():
+            icon_img = str(icon_path)  # let pystray load native ICO
+        else:
             icon_img = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
             draw = ImageDraw.Draw(icon_img)
             draw.ellipse([2, 2, 30, 30], fill=(130, 198, 83))
-            draw.rectangle([12, 8, 22, 22], fill=(255, 255, 255))
 
         def on_tray_show(icon, item):
             window.show()
