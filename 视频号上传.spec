@@ -16,7 +16,7 @@ a = Analysis(
     datas=[
         (_os.path.join(SPECPATH, 'templates'), 'templates'),
     ] + _ms_browsers,
-    hiddenimports=['accounts', 'uploader', 'logger'],
+    hiddenimports=['accounts', 'uploader', 'logger', 'plyer', 'pystray', 'PIL'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
