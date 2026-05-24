@@ -57,11 +57,15 @@ def main():
         from PIL import Image, ImageDraw
         import pystray
 
-        # Generate icon (32x32 green circle with 微 character)
-        icon_img = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(icon_img)
-        draw.ellipse([2, 2, 30, 30], fill=(7, 193, 96))
-        draw.text((8, 6), "微", fill=(255, 255, 255))
+        # Load tray icon (from bundled ICO, or fallback to simple icon)
+        icon_path = Path(__file__).parent / "icon.ico" if '__file__' in dir() else Path(sys._MEIPASS) / "icon.ico"
+        if icon_path.exists():
+            icon_img = Image.open(icon_path)
+        else:
+            icon_img = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(icon_img)
+            draw.ellipse([2, 2, 30, 30], fill=(130, 198, 83))
+            draw.rectangle([12, 8, 22, 22], fill=(255, 255, 255))
 
         def on_tray_show(icon, item):
             window.show()

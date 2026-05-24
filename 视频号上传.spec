@@ -15,6 +15,8 @@ a = Analysis(
     binaries=[],
     datas=[
         (_os.path.join(SPECPATH, 'templates'), 'templates'),
+        (_os.path.join(SPECPATH, 'icon.ico'), 'icon.ico'),
+        (_os.path.join(SPECPATH, 'icon.svg'), 'icon.svg'),
     ] + _ms_browsers,
     hiddenimports=['accounts', 'uploader', 'logger', 'plyer', 'pystray', 'PIL'],
     hookspath=[],
@@ -32,6 +34,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name='视频号上传',
+    icon='icon.ico',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
