@@ -15,7 +15,7 @@ from datetime import datetime
 
 sys.stdout.reconfigure(encoding='utf-8') if sys.stdout else None
 
-from flask import Flask, render_template, request, jsonify, send_file, url_for
+from flask import Flask, render_template, request, jsonify, send_file
 
 import shutil
 
@@ -74,6 +74,18 @@ def _add_log(account_name: str, msg: str):
     state["logs"].append(msg)
     if len(state["logs"]) > _MAX_LOG_LINES:
         state["logs"] = state["logs"][-_MAX_LOG_LINES:]
+
+
+def _compute_combined_progress(state: dict) -> int:
+    """计算总进度：已完成视频数 + 当前视频子进度 → 整体百分比"""
+    uploader = state.get("_current_uploader")
+    if uploader and state.get("running"):
+        completed = state.get("_current_index", 0)
+        total = state.get("_total_videos", 1)
+        sub = getattr(uploader, "_upload_progress", 0) / 100.0
+        return int((completed + sub) / max(total, 1) * 100)
+    return state.get("progress", 0)
+
 
 _scan_state = {
     "scanning": False,
@@ -179,6 +191,7 @@ async def _run_account_upload(account_name: str, profile_dir: Path, headless: bo
             # --- process queue ---
             queue = state["_video_queue"]
             total = len(queue)
+            state["_total_videos"] = total
             interval = state.get("_interval_min", 0)
 
             for i in range(total):
@@ -193,6 +206,8 @@ async def _run_account_upload(account_name: str, profile_dir: Path, headless: bo
                 state["status"] = f"上传中 ({i+1}/{total})"
                 _add_log(account_name, f"[开始] {title}")
 
+                state["_current_uploader"] = uploader
+                uploader._upload_progress = 0
                 result = await uploader.upload_single(
                     video_path=video["video_path"],
                     title=title,
@@ -232,6 +247,7 @@ async def _run_account_upload(account_name: str, profile_dir: Path, headless: bo
     finally:
         state["running"] = False
         state["_task"] = None
+        state["_current_uploader"] = None
         # Start cooldown timer: close browser after idle timeout
         if uploader and account_name not in _cooldown_timers:
             async def _cooldown():
@@ -420,7 +436,7 @@ def api_account_upload_status(name):
     return jsonify({
         "running": state.get("running", False),
         "status": state.get("status", ""),
-        "progress": state.get("progress", 0),
+        "progress": _compute_combined_progress(state),
         "logs": state.get("logs", [])[-20:],
         "result": state.get("result"),
         "cancelled": cancelled_is_set,
@@ -481,7 +497,7 @@ def api_all_upload_status():
         result[n] = {
             "running": s.get("running", False),
             "status": s.get("status", ""),
-            "progress": s.get("progress", 0),
+            "progress": _compute_combined_progress(s),
             "cancelled": cancelled_is_set,
         }
     return jsonify(result)
@@ -516,8 +532,8 @@ def api_add_account_with_scan():
                 page = await uploader._context.new_page()
                 _scan_state["_page"] = page
 
-                await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=30000)
-                await page.wait_for_timeout(3000)
+                await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=60000)
+                await page.wait_for_timeout(2000)
 
                 # 已有登录 session → 直接抓昵称创建账号
                 if await page.locator(SEL_ACCOUNT_INFO).count() > 0:
@@ -541,7 +557,7 @@ def api_add_account_with_scan():
                         qrcode = await uploader.capture_qrcode(page)
                         break
                     except Exception as e:
-                        log.debug(f"非关键操作失败: {e}")
+                        log.warning(f"二维码获取失败: {e}")
                         await page.wait_for_timeout(1000)
                 if not qrcode:
                     _scan_state["result"] = {"error": "无法获取二维码"}
@@ -579,7 +595,7 @@ def api_add_account_with_scan():
                                     qrcode = await uploader.capture_qrcode(page)
                                     break
                                 except Exception as e:
-                                    log.debug(f"非关键操作失败: {e}")
+                                    log.warning(f"二维码获取失败: {e}")
                                     await page.wait_for_timeout(1000)
                             _scan_state["qrcode"] = qrcode
                             _scan_state["status"] = "waiting"

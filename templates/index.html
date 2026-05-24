@@ -116,43 +116,15 @@
   .radio-row label{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:14px}
   .radio-row input[type=radio]{accent-color:var(--green)}
 
-  .acct-select{display:none}
-  /* 自定义下拉 */
-  .cust-select{position:relative;flex:1}
-  .cust-trigger{display:flex;align-items:center;justify-content:space-between;padding:6px 10px 6px 12px;border:1px solid var(--border);border-radius:6px;font-size:14px;font-family:inherit;background:var(--card);cursor:pointer;user-select:none;transition:border-color .2s;min-height:34px}
-  .cust-trigger:hover{border-color:var(--green)}
-  .cust-trigger.open{border-color:var(--green)}
-  .cust-trigger .cust-arrow{transition:transform .2s;color:var(--text2)}
-  .cust-trigger.open .cust-arrow{transform:rotate(180deg)}
-  .cust-dropdown{display:none;position:absolute;top:100%;left:0;right:0;margin-top:4px;background:var(--card);border:1px solid var(--border);border-radius:6px;box-shadow:0 4px 12px rgba(0,0,0,.1);z-index:50;max-height:200px;overflow-y:auto}
-  .cust-dropdown.show{display:block}
-  .cust-option{padding:8px 12px;font-size:14px;font-family:inherit;cursor:pointer;transition:background .1s}
-  .cust-option:hover{background:var(--hover-bg)}
-  .cust-option.selected{color:var(--green);font-weight:500}
-
   .btn{padding:10px 24px;border:none;border-radius:6px;font-size:14px;font-weight:500;cursor:pointer;transition:all .15s;font-family:inherit}
   .btn:disabled{opacity:.5;cursor:not-allowed}
   .btn-publish{background:var(--green);color:#fff;width:100%}
   .btn-publish:hover:not(:disabled){background:var(--green-hover)}
 
-  /* overlay */
-  .overlay{display:none;position:fixed;inset:0;background:var(--overlay-bg);z-index:100;align-items:center;justify-content:center}
-  .overlay.show{display:flex}
-  .overlay .modal{background:var(--card);border-radius:12px;padding:32px;text-align:center;max-width:400px;width:90%}
-  .overlay .spinner{width:40px;height:40px;border:3px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 16px}
-  @keyframes spin{to{transform:rotate(360deg)}}
-  .overlay .status-text{font-size:15px;color:var(--text)}
-  .overlay .progress-bar{height:6px;background:var(--bar-track);border-radius:3px;overflow:hidden;margin:8px 0}
-  .overlay .progress-fill{height:100%;background:var(--green);border-radius:3px;transition:width .3s}
-  .overlay .progress-text{font-size:12px;color:var(--text2)}
-  .overlay .log-text{font-size:12px;color:var(--text2);margin-top:8px;white-space:pre-wrap}
-
   .toast{position:fixed;top:20px;right:20px;background:#333;color:#fff;padding:10px 20px;border-radius:6px;font-size:13px;z-index:999;animation:slideIn .3s ease}
   @keyframes slideIn{from{transform:translateX(100px);opacity:0}}
 
   /* 账号管理 */
-  .acct-row{display:flex;gap:6px}
-  .acct-row .acct-select{flex:1}
   .btn-sm{padding:6px 12px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;font-family:inherit;transition:all .15s}
   .btn-mgmt{background:var(--border);color:var(--label);white-space:nowrap}
   .btn-mgmt:hover{background:var(--border)}
@@ -163,7 +135,7 @@
   .acct-overlay .modal-header h2{font-size:17px;font-weight:600}
   .acct-overlay .modal-close{background:none;border:none;font-size:20px;color:var(--text2);cursor:pointer;padding:0;line-height:1}
   .acct-overlay .modal-close:hover{color:var(--text)}
-  .acct-add-form{display:flex;gap:8px;margin-bottom:16px}
+  .acct-add-form{display:flex;gap:8px;margin-bottom:16px;padding:0 24px}
   .acct-add-form input{padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:inherit;outline:none;flex:1;min-width:0}
   .acct-add-form input:focus{border-color:var(--green)}
   .acct-table{width:100%;border-collapse:collapse;font-size:13px}
@@ -173,7 +145,7 @@
   .acct-table .acct-actions{display:flex;gap:6px}
   .acct-empty{padding:24px;text-align:center;color:var(--text2);font-size:13px}
 
-  .debug-toggle{position:fixed;left:8px;bottom:8px;font-size:10px;color:var(--text2);cursor:pointer;user-select:none;z-index:200;transition:color .2s}
+  .debug-toggle{position:absolute;left:8px;bottom:8px;font-size:10px;color:var(--text2);cursor:pointer;user-select:none;z-index:200;transition:color .2s}
   .debug-toggle:hover{color:var(--label)}
   .debug-toggle.active{color:var(--green)}
 
@@ -183,6 +155,7 @@
   .qrcode-modal{background:var(--card);border-radius:12px;padding:32px;text-align:center;max-width:360px;width:90%;position:relative}
   #qrcode-img{width:220px;height:220px;border:1px solid var(--border);border-radius:8px;object-fit:contain}
   .qrcode-status{display:flex;align-items:center;justify-content:center;gap:8px;margin-top:16px;font-size:14px;color:var(--label)}
+  @keyframes spin{to{transform:rotate(360deg)}}
   .qrcode-spinner{width:20px;height:20px;border:2px solid var(--border);border-top-color:var(--green);border-radius:50%;animation:spin .8s linear infinite}
   .qrcode-close{position:absolute;top:12px;right:12px;background:none;border:none;font-size:20px;color:var(--text2);cursor:pointer;line-height:1}
   .qrcode-close:hover{color:var(--text)}
@@ -213,7 +186,7 @@
   .sidebar-footer{padding:10px 14px;border-top:1px solid var(--border);margin-top:auto}
   .btn-sidebar{width:100%;padding:8px;border:1px dashed var(--border);border-radius:6px;background:none;color:var(--text2);cursor:pointer;font-size:12px;font-family:inherit;transition:all .15s}
   .btn-sidebar:hover{border-color:var(--green);color:var(--green)}
-  .main-area{flex:1;overflow-y:auto;padding:20px;background:var(--bg)}
+  .main-area{flex:1;overflow-y:auto;padding:20px;background:var(--bg);position:relative}
   .main-empty{display:flex;align-items:center;justify-content:center;height:100%;color:var(--text2);font-size:14px}
 
 
@@ -237,6 +210,7 @@
     <div class="main-empty" id="main-empty">← 选择或添加一个账号开始</div>
     <div id="main-content" style="display:none">
     </div>
+    <div class="debug-toggle" id="debug-toggle" onclick="toggleDebug()" title="切换有头/无头浏览器">debug</div>
   </div>
 </div>
 
@@ -247,8 +221,8 @@
       <button class="modal-close" onclick="closeAccountManager()">✕</button>
     </div>
     <div class="acct-add-form">
-      <button class="btn-sm" style="flex:1;background:var(--green);color:#fff;padding:10px;font-size:14px" onclick="addAccount()">添加账号</button>
-      <button class="btn-sm" id="check-btn" style="flex:1;background:var(--blue);color:#fff;padding:10px;font-size:14px" onclick="checkAccounts()">检测</button>
+      <button class="btn-sm" style="flex:7;background:var(--green);color:#fff;padding:10px;font-size:14px" onclick="addAccount()">添加账号</button>
+      <button class="btn-sm" id="check-btn" style="flex:1.5;background:var(--blue);color:#fff;padding:10px;font-size:14px;transition:all .15s" onclick="checkAccounts()">检测</button>
     </div>
     <table class="acct-table">
       <thead><tr><th>昵称</th><th>最后登录</th><th>操作</th></tr></thead>
@@ -270,19 +244,6 @@
   </div>
 </div>
 
-<div class="overlay" id="overlay">
-  <div class="modal">
-    <div class="spinner" id="spinner"></div>
-    <div class="status-text" id="status-text">准备上传…</div>
-    <div style="display:flex;align-items:center;gap:8px">
-      <div class="progress-bar" style="flex:1"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
-      <span id="progress-pct" style="font-size:12px;color:var(--text2);min-width:36px;text-align:right">0%</span>
-    </div>
-    <div class="progress-text" id="progress-text"></div>
-    <div class="log-text" id="log-text"></div>
-    <button class="btn btn-danger btn-full" style="margin-top:16px" onclick="cancelUpload()">取消上传</button>
-  </div>
-</div>
 
 <script>
 // ==================== 安全措施 ====================
@@ -338,8 +299,8 @@ function renderSidebar() {
     const st = accountStates[a.name] || { status: 'idle', progress: 0, running: false };
     const active = currentAccount === a.name ? ' active' : '';
     const statCls = st.running ? 'running' : (st.status.startsWith('失败') || st.status.startsWith('异常') ? 'error' : '');
-    const statText = st.running
-      ? st.status + ' ' + st.progress + '%'
+    const statText = !a.last_login ? '未登录'
+      : st.running ? st.status + ' ' + st.progress + '%'
       : (st.status === '全部完成' ? '已完成' : (st.status === 'idle' ? '空闲' : st.status));
     return `<div class="acct-item${active}" onclick="switchAccount('${esc(a.name)}')">
       <div class="acct-nick">${esc(a.nickname || a.name)}</div>
@@ -961,14 +922,16 @@ let _checkPollTimer = null;
 async function checkAccounts() {
   const btn = document.getElementById('check-btn');
   if (!btn) return;
+  if (btn.disabled) return;
   btn.disabled = true;
   btn.textContent = '检测中...';
+  btn.style.opacity = '0.7';
+  btn.style.boxShadow = 'inset 0 2px 4px rgba(0,0,0,.2)';
+  btn.style.cursor = 'not-allowed';
   try {
     const res = await fetch('/api/accounts/check', { method: 'POST' });
     const data = await res.json();
-    if (res.status === 409) { toast(data.error || '检测进行中'); return; }
-    if (res.status === 200) { toast(data.message || '无已登录账号'); return; }
-    if (res.status !== 202) { toast('检测启动失败'); return; }
+    if (res.status !== 202) { toast(data.error || data.message || '检测启动失败'); return; }
 
     function poll() {
       _checkPollTimer = setTimeout(async () => {
@@ -978,9 +941,15 @@ async function checkAccounts() {
           refreshAccountTable(st.results);
           if (st.done) {
             await loadAccounts();
+            const results = st.results || {};
+            const failed = Object.entries(results).filter(([, ok]) => !ok).map(([n]) => n);
+            if (failed.length > 0) {
+              toast('检测完成，' + failed.length + ' 个账号已失效：' + failed.join('、'));
+            } else {
+              toast('检测完成，全部有效');
+            }
             refreshAccountTable(null);
             renderSidebar();
-            toast('检测完成');
             return;
           }
           poll();
@@ -993,6 +962,9 @@ async function checkAccounts() {
   } finally {
     btn.disabled = false;
     btn.textContent = '检测';
+    btn.style.opacity = '';
+    btn.style.boxShadow = '';
+    btn.style.cursor = '';
   }
 }
 
@@ -1040,7 +1012,10 @@ async function pollQrcodeStatus() {
   if (!st.scanning) {
     spinner.style.display = 'none';
     if (st.result && st.result.success) { await loadAccounts(); setTimeout(closeQrcodeModal, 1500); }
-    else { setTimeout(closeQrcodeModal, 3000); }
+    else {
+      statusText.textContent = st.result && st.result.error ? st.result.error : '未知错误';
+      setTimeout(closeQrcodeModal, 3000);
+    }
     return;
   }
   qrcodeTimer = setTimeout(pollQrcodeStatus, 1000);
@@ -1116,6 +1091,5 @@ function updateThemeIcon() {
 }
 </script>
 
-<div class="debug-toggle" id="debug-toggle" onclick="toggleDebug()" title="切换有头/无头浏览器">debug</div>
 </body>
 </html>

@@ -75,6 +75,7 @@ class WeChatUploader:
             "--disable-blink-features=AutomationControlled",
             "--no-sandbox",
             "--disable-dev-shm-usage",
+            "--no-proxy-server",
             "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
         ]
         if not self.headless:
@@ -193,30 +194,70 @@ class WeChatUploader:
                 return frame
         raise RuntimeError("未找到二维码 iframe")
 
+    async def _find_qrcode_element(self, page: Page):
+        """
+        多策略查找二维码元素。
+        微信可能改版：iframe 内 / 主页面内 / img 标签 / canvas 等。
+        返回 (locator, container_label) 或 raise。
+        """
+        # 策略1: iframe 内的 img（原有逻辑）
+        try:
+            frame = await self._find_qrcode_frame(page)
+            img = frame.locator("img").first
+            if await img.count() > 0:
+                return img, "iframe-img"
+        except RuntimeError:
+            pass
+
+        # 策略2: 主页面中查找二维码图片（class/id 包含 qrcode/qr/login 等）
+        for sel in [
+            'img[class*="qrcode"]', 'img[class*="qr_code"]', 'img[class*="QrCode"]',
+            'img[id*="qrcode"]', 'img[id*="qr_code"]',
+            'img[src*="qrcode"]', 'img[src*="qr_code"]',
+            '.qrcode img', '.qr_code img', '.login-qr img',
+            '.wx-login-qr img', '.weixin-qr img',
+        ]:
+            el = page.locator(sel).first
+            if await el.count() > 0:
+                return el, f"main-{sel}"
+
+        # 策略3: 主页面中查找 canvas（部分新版用 canvas 渲染二维码）
+        for sel in ['canvas[class*="qr"]', 'canvas[id*="qr"]']:
+            el = page.locator(sel).first
+            if await el.count() > 0:
+                return el, f"main-{sel}"
+
+        # 策略4: 查找包含二维码图片的 iframe（不限文字匹配）
+        for frame in reversed(page.frames):
+            for sel in ['img[class*="qr"]', 'img[src*="qr"]', 'img[src*="login"]']:
+                el = frame.locator(sel).first
+                if await el.count() > 0:
+                    return el, f"fallback-frame-{sel}"
+
+        raise RuntimeError("所有策略均未找到二维码元素")
+
     async def capture_qrcode(self, page: Page) -> str:
-        """截取登录页二维码，返回 base64 data URL"""
-        frame = await self._find_qrcode_frame(page)
-        # 找到二维码所在的容器，截图整个二维码区域
-        qr_area = frame.locator("img").first
+        """截取登录页二维码，返回 base64 data URL（多策略）"""
+        qr_area, strategy = await self._find_qrcode_element(page)
+        log.info(f"[QR] 使用策略: {strategy}")
         await qr_area.wait_for(state="visible", timeout=30000)
         screenshot = await qr_area.screenshot(type="png")
         return "data:image/png;base64," + base64.b64encode(screenshot).decode()
 
     async def check_qrcode_expired(self, page: Page) -> bool:
-        """检测二维码是否已过期（仅匹配可见元素）"""
-        frame = await self._find_qrcode_frame(page)
-        expired = frame.locator(SEL_QRCODE_EXPIRED).locator(':visible')
-        if await expired.count() > 0:
-            return True
+        """检测二维码是否已过期（搜索所有 frame）"""
+        for frame in page.frames:
+            if await frame.locator(SEL_QRCODE_EXPIRED).locator(':visible').count() > 0:
+                return True
         return False
 
     async def check_qrcode_scanned(self, page: Page) -> str:
-        """检测二维码扫描状态，返回 'waiting'|'scanned'|'confirming'"""
-        frame = await self._find_qrcode_frame(page)
-        if await frame.locator(SEL_QRCODE_CONFIRM).locator(':visible').count() > 0:
-            return "confirming"
-        if await frame.locator(SEL_QRCODE_SCANNED).locator(':visible').count() > 0:
-            return "scanned"
+        """检测二维码扫描状态，返回 'waiting'|'scanned'|'confirming'（搜索所有 frame）"""
+        for frame in page.frames:
+            if await frame.locator(SEL_QRCODE_CONFIRM).locator(':visible').count() > 0:
+                return "confirming"
+            if await frame.locator(SEL_QRCODE_SCANNED).locator(':visible').count() > 0:
+                return "scanned"
         return "waiting"
 
     # ==================== 上传 ====================
