@@ -211,6 +211,7 @@
     <div id="main-content" style="display:none">
     </div>
     <div class="debug-toggle" id="debug-toggle" onclick="toggleDebug()" title="切换有头/无头浏览器">debug</div>
+    <span class="debug-toggle" id="sound-toggle" onclick="toggleSound()" title="关闭提示音" style="left:60px">提示音</span>
   </div>
 </div>
 
@@ -1069,12 +1070,26 @@ async function toggleDebug() {
   if (el) { el.classList.toggle('active', debugMode); el.textContent = debugMode ? 'debug on' : 'debug'; }
   await fetch('/api/debug', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ debug: debugMode }) });
 }
+
+let soundEnabled = true;
+function toggleSound() {
+  soundEnabled = !soundEnabled;
+  const el = document.getElementById('sound-toggle');
+  if (el) { el.classList.toggle('active', soundEnabled); el.textContent = soundEnabled ? '提示音' : '已静音'; }
+  localStorage.setItem('soundEnabled', soundEnabled ? '1' : '0');
+  fetch('/api/config/sound', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: soundEnabled }) });
+}
 (async () => {
   const r = await fetch('/api/debug');
   const d = await r.json();
   debugMode = d.debug;
   const el = document.getElementById('debug-toggle');
   if (el) { if (debugMode) el.classList.add('active'); el.textContent = debugMode ? 'debug on' : 'debug'; }
+
+  soundEnabled = localStorage.getItem('soundEnabled') !== '0';
+  const soundEl = document.getElementById('sound-toggle');
+  if (soundEl) { soundEl.classList.toggle('active', soundEnabled); soundEl.textContent = soundEnabled ? '提示音' : '已静音'; }
+  fetch('/api/config/sound', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled: soundEnabled }) });
 })();
 
 // ==================== 暗色模式 ====================

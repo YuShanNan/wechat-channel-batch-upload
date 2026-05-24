@@ -87,6 +87,41 @@ def _compute_combined_progress(state: dict) -> int:
     return state.get("progress", 0)
 
 
+_sound_enabled = True
+
+
+def _notify_upload_complete(account_name: str, total: int):
+    """Upload complete: system notification + optional sound."""
+    state = _get_or_create_account_state(account_name)
+    queue = state.get("_video_queue", [])
+    failed = sum(1 for v in queue
+                 if v.get("_status") != WeChatUploader.STATUS_PUBLISHED
+                 and v.get("_status") != "skipped")
+    success = total - failed
+
+    msg = f"{success} 个视频上传完成（共 {total} 个）"
+    if failed > 0:
+        msg += f"，{failed} 个失败"
+
+    try:
+        from plyer import notification
+        notification.notify(
+            title="视频号上传",
+            message=msg,
+            app_name="视频号上传",
+            timeout=5,
+        )
+    except Exception:
+        pass
+
+    if _sound_enabled:
+        try:
+            import winsound
+            winsound.MessageBeep(0x00000040)
+        except Exception:
+            pass
+
+
 _scan_state = {
     "scanning": False,
     "status": "",  # loading|waiting|scanned|confirming|logged_in|expired|timeout|error|cancelled
@@ -266,6 +301,7 @@ async def _run_account_upload(account_name: str, profile_dir: Path, headless: bo
             if not cancel_ev.is_set():
                 state["status"] = "全部完成"
                 state["progress"] = 100
+                _notify_upload_complete(account_name, total)
 
     except Exception as e:
         state["status"] = f"异常: {e}"
@@ -303,6 +339,19 @@ def api_debug_set():
     data = request.get_json()
     _debug_mode = bool(data.get("debug", False))
     return jsonify({"debug": _debug_mode})
+
+@app.route("/api/config/sound", methods=["GET"])
+def api_sound_get():
+    return jsonify({"enabled": _sound_enabled})
+
+
+@app.route("/api/config/sound", methods=["POST"])
+def api_sound_set():
+    global _sound_enabled
+    data = request.get_json()
+    _sound_enabled = bool(data.get("enabled", True))
+    return jsonify({"enabled": _sound_enabled})
+
 
 @app.route("/api/accounts", methods=["GET"])
 def api_list_accounts():
