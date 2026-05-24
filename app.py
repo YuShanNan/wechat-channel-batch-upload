@@ -99,7 +99,11 @@ def main():
         )
 
         # Override window close to minimize to tray instead of closing
-        window.events.closing = lambda: (window.hide(), False)
+        def _on_closing():
+            window.hide()
+            return False  # prevent default close
+
+        window.events.closing += _on_closing
 
         # Run tray in daemon thread so it doesn't block webview.start()
         threading.Thread(target=tray_icon.run, daemon=True).start()
