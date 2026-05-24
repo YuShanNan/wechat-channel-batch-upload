@@ -61,13 +61,13 @@ def main():
         icon_path = (Path(sys._MEIPASS) / "icon.ico") if hasattr(sys, '_MEIPASS') else (Path(__file__).parent / "icon.ico")
         if icon_path.exists():
             try:
-                icon_img = Image.open(icon_path).resize((32, 32), Image.LANCZOS)
+                icon_img = Image.open(icon_path).resize((16, 16), Image.LANCZOS)
             except Exception:
-                icon_img = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
-                ImageDraw.Draw(icon_img).ellipse([2, 2, 30, 30], fill=(130, 198, 83))
+                icon_img = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+                ImageDraw.Draw(icon_img).ellipse([1, 1, 15, 15], fill=(130, 198, 83))
         else:
-            icon_img = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
-            ImageDraw.Draw(icon_img).ellipse([2, 2, 30, 30], fill=(130, 198, 83))
+            icon_img = Image.new("RGBA", (16, 16), (0, 0, 0, 0))
+            ImageDraw.Draw(icon_img).ellipse([1, 1, 15, 15], fill=(130, 198, 83))
 
         def on_tray_show(icon, item):
             window.show()
@@ -104,10 +104,21 @@ def main():
             ),
         )
 
-        # Override window close to minimize to tray instead of closing
+        # Override window close: ask user to minimize or exit
         def _on_closing():
-            window.hide()
-            return False  # prevent default close
+            import ctypes
+            result = ctypes.windll.user32.MessageBoxW(
+                0,
+                "关闭窗口后你想做什么？",
+                "视频号上传",
+                0x00000003 | 0x00000020,  # MB_YESNOCANCEL | MB_ICONQUESTION
+            )
+            if result == 6:  # IDYES — 退到后台
+                window.hide()
+            elif result == 7:  # IDNO — 退出程序
+                on_tray_exit(None, None)
+            # IDCANCEL (2) — 取消，什么都不做
+            return False
 
         window.events.closing += _on_closing
 
