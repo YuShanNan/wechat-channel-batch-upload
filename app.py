@@ -58,11 +58,11 @@ def main():
         from PIL import Image, ImageDraw
         import pystray
 
-        # Tray icon: load ICO with PIL (keep native resolution, no forced resize)
+        # Tray icon: load ICO, convert to RGBA, resize to tray size
         icon_path = (Path(sys._MEIPASS) / "icon.ico") if hasattr(sys, '_MEIPASS') else (Path(__file__).parent / "icon.ico")
         if icon_path.exists():
             try:
-                icon_img = Image.open(icon_path)
+                icon_img = Image.open(icon_path).convert("RGBA").resize((32, 32), Image.LANCZOS)
             except Exception:
                 icon_img = Image.new("RGBA", (32, 32), (0, 0, 0, 0))
                 ImageDraw.Draw(icon_img).ellipse([2, 2, 30, 30], fill=(130, 198, 83))
