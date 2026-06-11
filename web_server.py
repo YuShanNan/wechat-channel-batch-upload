@@ -18,6 +18,7 @@ sys.stdout.reconfigure(encoding='utf-8') if sys.stdout else None
 from flask import Flask, render_template, request, jsonify, send_file
 
 import shutil
+import uuid
 
 import accounts as account_mgr
 from uploader import WeChatUploader, CREATE_URL, SEL_ACCOUNT_INFO
@@ -28,7 +29,7 @@ log = get_logger("server")
 app = Flask(__name__)
 app.config['TEMPLATES_AUTO_RELOAD'] = True
 
-_BASE_DIR = Path(sys._MEIPASS) if getattr(sys, 'frozen', False) else Path(__file__).parent
+_BASE_DIR = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
 
 RESULTS_DIR = _BASE_DIR / "data" / "results"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -40,7 +41,10 @@ MAX_UPLOAD_SIZE = 20 * 1024 * 1024 * 1024  # 20GB
 def _clean_temp_dir():
     for f in TEMP_DIR.iterdir():
         try:
-            f.unlink()
+            if f.is_dir():
+                shutil.rmtree(f, ignore_errors=True)
+            else:
+                f.unlink()
         except Exception as e:
             log.debug(f"非关键操作失败: {e}")
 
@@ -48,24 +52,26 @@ _clean_temp_dir()
 atexit.register(_clean_temp_dir)
 
 _account_upload_state: dict[str, dict] = {}
+_state_lock = threading.Lock()
 
 def _get_or_create_account_state(account_name: str) -> dict:
     """Get or lazily initialize upload state for an account."""
-    if account_name not in _account_upload_state:
-        _account_upload_state[account_name] = {
-            "running": False,
-            "status": "",
-            "progress": 0,
-            "logs": [],
-            "result": None,
-            "cancelled": True,   # re-created as asyncio.Event when task starts
-            "skip_current": True,
-            "_task": None,
-            "_video_queue": [],
-            "_current_index": 0,
-            "_interval_min": 0,
-        }
-    return _account_upload_state[account_name]
+    with _state_lock:
+        if account_name not in _account_upload_state:
+            _account_upload_state[account_name] = {
+                "running": False,
+                "status": "",
+                "progress": 0,
+                "logs": [],
+                "result": None,
+                "cancelled": True,   # re-created as asyncio.Event when task starts
+                "skip_current": True,
+                "_task": None,
+                "_video_queue": [],
+                "_current_index": 0,
+                "_interval_min": 0,
+            }
+        return _account_upload_state[account_name]
 
 _MAX_LOG_LINES = 200
 
@@ -137,15 +143,16 @@ _debug_mode = False
 # 持久化事件循环 + uploader 缓存，视频间复用浏览器会话
 _uploader_cache = {}
 _MAX_CONCURRENT = int(os.environ.get("WECHAT_MAX_CONCURRENT", "3"))
-_upload_semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
+_upload_semaphore = None  # 在事件循环线程内创建，确保绑定正确
 _cooldown_timers: dict[str, asyncio.Task] = {}
 _COOLDOWN_SECONDS = 60
 _event_loop = None
 
 def _start_persistent_loop():
-    global _event_loop
+    global _event_loop, _upload_semaphore
     loop = asyncio.new_event_loop()
     _event_loop = loop
+    _upload_semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
     asyncio.set_event_loop(loop)
     loop.run_forever()
 
@@ -163,12 +170,13 @@ def _close_uploader_safe(uploader):
         asyncio.run_coroutine_threadsafe(_close(), _event_loop)
 
 def _cleanup_uploaders():
-    for name, timer in list(_cooldown_timers.items()):
-        timer.cancel()
-    _cooldown_timers.clear()
-    for name, u in list(_uploader_cache.items()):
-        _close_uploader_safe(u)
-    _uploader_cache.clear()
+    with _state_lock:
+        for name, timer in list(_cooldown_timers.items()):
+            timer.cancel()
+        _cooldown_timers.clear()
+        for name, u in list(_uploader_cache.items()):
+            _close_uploader_safe(u)
+        _uploader_cache.clear()
 
 atexit.register(_cleanup_uploaders)
 
@@ -312,12 +320,14 @@ async def _run_account_upload(account_name: str, profile_dir: Path, headless: bo
         state["_task"] = None
         state["_current_uploader"] = None
         # Start cooldown timer: close browser after idle timeout
-        if uploader and account_name not in _cooldown_timers:
-            async def _cooldown():
-                await asyncio.sleep(_COOLDOWN_SECONDS)
-                if account_name in _cooldown_timers:
-                    del _cooldown_timers[account_name]
-                cached = _uploader_cache.pop(account_name, None)
+        with _state_lock:
+            if uploader and account_name not in _cooldown_timers:
+                async def _cooldown():
+                    await asyncio.sleep(_COOLDOWN_SECONDS)
+                    with _state_lock:
+                        if account_name in _cooldown_timers:
+                            del _cooldown_timers[account_name]
+                    cached = _uploader_cache.pop(account_name, None)
                 if cached:
                     await cached.close()
                     log.info(f"[cooldown] 已关闭 {account_name} 浏览器会话")
@@ -490,11 +500,14 @@ def api_account_upload_start(name):
     state["_interval_min"] = data.get("interval_min", 0)
     state["progress"] = 0
     state["logs"] = []
+    state["_current_index"] = 0
+    state["_total_videos"] = len(videos)
 
     # Cancel any cooldown timer
-    if name in _cooldown_timers:
-        _cooldown_timers[name].cancel()
-        del _cooldown_timers[name]
+    with _state_lock:
+        if name in _cooldown_timers:
+            _cooldown_timers[name].cancel()
+            del _cooldown_timers[name]
 
     # Launch upload task on persistent event loop
     headless = not _debug_mode
@@ -552,9 +565,8 @@ def api_account_upload_cancel(name):
     if uploader:
         _close_uploader_safe(uploader)
 
-    state["status"] = "已取消"
-    state["running"] = False
-    return jsonify({"message": "已取消"})
+    state["status"] = "正在取消..."
+    return jsonify({"message": "取消指令已发送"})
 
 @app.route("/api/accounts/<name>/upload/skip", methods=["POST"])
 def api_account_upload_skip(name):
@@ -772,7 +784,7 @@ def api_scan_status():
 
 
 def _sanitize_nickname(nickname: str) -> str:
-    cleaned = re.sub(r'[^一-龥a-zA-Z0-9_\-]', '', nickname)
+    cleaned = re.sub(r'[^\u3400-\u9fff\u3000-\u303fa-zA-Z0-9_\-]', '', nickname)
     if not cleaned:
         cleaned = f"user_{datetime.now().strftime('%H%M%S')}"
     return cleaned[:30]
@@ -803,7 +815,7 @@ def api_upload_temp():
     if not f.filename:
         return jsonify({"error": "空文件名"}), 400
     safe_name = Path(f.filename).name
-    dest = TEMP_DIR / safe_name
+    dest = TEMP_DIR / f"{uuid.uuid4().hex[:8]}_{safe_name}"
     f.save(str(dest))
     return jsonify({"path": str(dest), "name": f.filename})
 

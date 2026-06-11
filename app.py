@@ -27,6 +27,7 @@ def wait_for_flask():
             return
         except Exception:
             time.sleep(0.05)
+    raise RuntimeError(f"Flask 服务启动失败，请检查端口 {PORT} 是否被占用")
 
 
 def main():
@@ -92,7 +93,7 @@ def main():
 
             icon.stop()
             window.destroy()
-            os._exit(0)
+            sys.exit(0)
 
         tray_icon = pystray.Icon(
             "wechat_uploader",

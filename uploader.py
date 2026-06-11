@@ -117,15 +117,14 @@ class WeChatUploader:
     def _reset_window_state(self):
         """删除上次窗口位置缓存，避免 --window-position 被覆盖"""
         default = self.profile_dir / "Default"
-        for name in ["Preferences", "Sessions"]:
-            p = default / name
-            try:
-                if p.is_dir():
-                    shutil.rmtree(p, ignore_errors=True)
-                elif p.exists():
-                    p.unlink()
-            except Exception as e:
-                log.debug(f"非关键操作失败: {e}")
+        p = default / "Preferences"
+        try:
+            if p.is_dir():
+                shutil.rmtree(p, ignore_errors=True)
+            elif p.exists():
+                p.unlink()
+        except Exception as e:
+            log.debug(f"非关键操作失败: {e}")
 
     async def close(self):
         if not self._context:
@@ -199,7 +198,7 @@ class WeChatUploader:
         """
         el = page.locator(SEL_ACCOUNT_NAME).first
         if await el.count() > 0:
-            text = (await el.text_content()).strip()
+            text = (await el.text_content() or "").strip()
             if text:
                 return text
         raise RuntimeError("无法获取昵称")
@@ -425,7 +424,7 @@ class WeChatUploader:
             except Exception as e:
                 log.debug(f"非关键操作失败: {e}")
             await page.wait_for_timeout(500)
-        log.info("等待超时，发表按钮仍为禁用状态")
+        raise TimeoutError("视频上传超时，发表按钮仍为禁用状态")
 
     async def _set_cover(self, page: Page, cover_path: str, video_path: str):
         """设置封面图片——个人主页卡片(3:4) + 分享卡片(4:3)"""
@@ -605,23 +604,20 @@ class WeChatUploader:
 
     async def _set_scheduled_time(self, page: Page, time_str: str):
         """设置定时发表时间"""
-        # 点击"定时" radio
         scheduled_radio = page.get_by_role("radio", name=SEL_SCHEDULED_RADIO)
         try:
             await scheduled_radio.click()
             await page.wait_for_timeout(500)
         except Exception:
-            log.info("无法切换到定时模式")
-            return
+            raise RuntimeError("无法切换到定时模式")
 
-        # 找到时间输入框并填写
-        # 寻找 datetime-local 或日期时间 input
         datetime_inputs = page.locator(SEL_DATETIME_INPUT)
         if await datetime_inputs.count() > 0:
-            # 转换时间格式 "2026-04-28 10:30" → "2026-04-28T10:30"
             formatted = time_str.replace(" ", "T")
             await datetime_inputs.first.fill(formatted)
             log.info(f"定时发表已设置: {time_str}")
+        else:
+            raise RuntimeError("未找到定时时间输入框")
 
     async def _click_publish(self, page: Page):
         """点击发表按钮"""

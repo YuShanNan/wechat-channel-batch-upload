@@ -325,13 +325,14 @@ async function loadAccounts() {
 }
 loadAccounts();
 
+let _lastSidebarHTML = '';
 function renderSidebar() {
   const container = document.getElementById('sidebar-accounts');
   if (!accounts.length) {
     container.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text2);font-size:12px">暂无账号</div>';
     return;
   }
-  container.innerHTML = accounts.map(a => {
+  const html = accounts.map(a => {
     const st = accountStates[a.name] || { status: 'idle', progress: 0, running: false };
     const active = currentAccount === a.name ? ' active' : '';
     const statCls = st.running ? 'running' : (st.status.startsWith('失败') || st.status.startsWith('异常') ? 'error' : '');
@@ -343,11 +344,16 @@ function renderSidebar() {
       <div class="acct-stat ${statCls}">${esc(statText)}</div>
     </div>`;
   }).join('');
+  if (html === _lastSidebarHTML) return;
+  _lastSidebarHTML = html;
+  container.innerHTML = html;
 }
 
 function switchAccount(name) {
   saveCurrentForm();
   currentAccount = name;
+  _lastQueueLen = -1;
+  _lastSidebarHTML = '';
   initAccountState(name);
   renderSidebar();
   renderMainContent();
@@ -605,6 +611,8 @@ function setCoverDataForAccount(path, name) {
 }
 
 // ==================== 队列渲染（per-account） ====================
+let _lastQueueLen = -1;
+let _lastQueueAccount = '';
 function renderQueueForAccount() {
   const st = accountStates[currentAccount];
   const queue = st.videoQueue;
@@ -616,31 +624,56 @@ function renderQueueForAccount() {
   countEl.textContent = queue.length;
   if (queue.length === 0) {
     row.innerHTML = '';
+    _lastQueueLen = 0;
+    _lastQueueAccount = currentAccount;
     if (previewCard) previewCard.style.display = 'none';
     return;
   }
   if (previewCard) previewCard.style.display = '';
 
-  const W = 140;
-  row.innerHTML = queue.map((v, i) => {
-    const cls = v.status === 'done' ? 'done' : v.status === 'fail' ? 'fail' : '';
-    const src = v.path ? '/api/preview/' + encodeURIComponent(v.path) : '';
-    const h = v.cardHeight || 78;
-    return '<div id="qw-' + i + '" style="display:flex;flex-direction:column;align-items:center;gap:2px" onclick="updatePreview(' + i + ')" draggable="true" onDragStart="onDragStart(event,' + i + ')" onDragOver="onDragOver(event)" onDrop="onDrop(event,' + i + ')" onDragEnd="onDragEnd(event)">'
-      + '<div class="queue-card' + (i === 0 ? ' active' : '') + '" id="qc-' + i + '" style="width:' + W + 'px;height:' + h + 'px">'
-      + (src ? '<video class="qc-thumb" id="qcv-' + i + '" src="' + src + '" preload="metadata" muted onloadedmetadata="setCardHeight(this,document.getElementById(\'qc-' + i + '\'),' + i + ')"></video>' : '<div class="qc-thumb" id="qcv-' + i + '" style="display:flex;align-items:center;justify-content:center;color:#666;font-size:11px">...</div>')
-      + (cls ? '<div class="qc-status ' + cls + '">' + (cls === 'done' ? '✓' : '✗') + '</div>' : '')
-      + '<div class="qc-remove" onclick="event.stopPropagation();removeFromQueue(' + i + ')">✕</div>'
-      + '</div><div class="qc-name" title="' + v.name + '">' + v.name + '</div></div>';
-  }).join('');
+  if (queue.length !== _lastQueueLen || currentAccount !== _lastQueueAccount) {
+    _lastQueueLen = queue.length;
+    _lastQueueAccount = currentAccount;
 
-  queue.forEach((v, i) => {
-    if (v.cardHeight) {
+    const W = 140;
+    row.innerHTML = queue.map((v, i) => {
+      const cls = v.status === 'done' ? 'done' : v.status === 'fail' ? 'fail' : '';
+      const src = v.path ? '/api/preview/' + encodeURIComponent(v.path) : '';
+      const h = v.cardHeight || 78;
+      return '<div id="qw-' + i + '" style="display:flex;flex-direction:column;align-items:center;gap:2px" onclick="updatePreview(' + i + ')" draggable="true" onDragStart="onDragStart(event,' + i + ')" onDragOver="onDragOver(event)" onDrop="onDrop(event,' + i + ')" onDragEnd="onDragEnd(event)">'
+        + '<div class="queue-card' + (i === 0 ? ' active' : '') + '" id="qc-' + i + '" style="width:' + W + 'px;height:' + h + 'px">'
+        + (src ? '<video class="qc-thumb" id="qcv-' + i + '" src="' + src + '" preload="metadata" muted onloadedmetadata="setCardHeight(this,document.getElementById(\'qc-' + i + '\'),' + i + ')"></video>' : '<div class="qc-thumb" id="qcv-' + i + '" style="display:flex;align-items:center;justify-content:center;color:#666;font-size:11px">...</div>')
+        + (cls ? '<div class="qc-status ' + cls + '">' + (cls === 'done' ? '✓' : '✗') + '</div>' : '')
+        + '<div class="qc-remove" onclick="event.stopPropagation();removeFromQueue(' + i + ')">✕</div>'
+        + '</div><div class="qc-name" title="' + v.name + '">' + v.name + '</div></div>';
+    }).join('');
+
+    queue.forEach((v, i) => {
+      if (v.cardHeight) {
+        const card = document.getElementById('qc-' + i);
+        if (card) card.style.height = v.cardHeight + 'px';
+      }
+    });
+    if (queue.length > 0 && document.getElementById('preview-wrap') && !document.getElementById('preview-wrap').classList.contains('show')) updatePreview(0);
+  } else {
+    queue.forEach((v, i) => {
       const card = document.getElementById('qc-' + i);
-      if (card) card.style.height = v.cardHeight + 'px';
-    }
-  });
-  if (queue.length > 0 && document.getElementById('preview-wrap') && !document.getElementById('preview-wrap').classList.contains('show')) updatePreview(0);
+      if (!card) return;
+      const cls = v.status === 'done' ? 'done' : v.status === 'fail' ? 'fail' : '';
+      let badge = card.querySelector('.qc-status');
+      if (cls) {
+        if (!badge) {
+          badge = document.createElement('div');
+          badge.className = 'qc-status';
+          card.appendChild(badge);
+        }
+        badge.className = 'qc-status ' + cls;
+        badge.textContent = cls === 'done' ? '✓' : '✗';
+      } else if (badge) {
+        badge.remove();
+      }
+    });
+  }
 }
 
 function setCardHeight(vel, card, i) {
@@ -825,6 +858,8 @@ async function _pollStatus(accountName) {
     const local = accountStates[accountName];
     if (!local) return;
 
+    const prevState = local.running + '|' + local.status + '|' + local.progress;
+
     local.status = st.status || '';
     local.progress = st.progress || 0;
     local.logs = st.logs || [];
@@ -852,10 +887,12 @@ async function _pollStatus(accountName) {
     } else {
       _statusPollTimer = setTimeout(() => _pollStatus(accountName), 1000);
     }
+
+    const newState = local.running + '|' + local.status + '|' + local.progress;
+    if (prevState !== newState) renderSidebar();
   } catch (e) {
     _statusPollTimer = setTimeout(() => _pollStatus(accountName), 3000);
   }
-  renderSidebar();
 }
 
 function updateUploadBar(st) {

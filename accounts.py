@@ -3,6 +3,9 @@
 每个账号独立 Chrome profile 目录
 """
 import json
+import os
+import re
+import tempfile
 from pathlib import Path
 from typing import Optional
 import sys
@@ -13,21 +16,40 @@ DATA_DIR = _BASE_DIR / "data"
 ACCOUNTS_FILE = DATA_DIR / "accounts.json"
 ACCOUNTS_ROOT = _BASE_DIR / "accounts"
 
+_NAME_RE = re.compile(r'^[a-zA-Z0-9_\-\u4e00-\u9fff]{1,50}$')
+
 
 def load_accounts() -> dict:
     """加载账号列表"""
     if not ACCOUNTS_FILE.exists():
         return {"accounts": {}}
 
-    with open(ACCOUNTS_FILE, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(ACCOUNTS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {"accounts": {}}
 
 
 def save_accounts(data: dict):
-    """保存账号列表"""
+    """保存账号列表（原子写入，防止崩溃时数据丢失）"""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    with open(ACCOUNTS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    fd, tmp_path = tempfile.mkstemp(dir=str(DATA_DIR), suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, str(ACCOUNTS_FILE))
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def validate_account_name(name: str) -> bool:
+    """校验账号名称是否合法"""
+    return bool(_NAME_RE.match(name))
 
 
 def add_account(name: str, nickname: str = "") -> dict:
@@ -35,6 +57,9 @@ def add_account(name: str, nickname: str = "") -> dict:
     添加新账号
     返回更新后的账号信息
     """
+    if not validate_account_name(name):
+        return {"error": f"账号名称不合法，仅支持中英文、数字、下划线、连字符（1-50字符）"}
+
     data = load_accounts()
     if name in data["accounts"]:
         return {"error": f"账号 {name} 已存在"}
@@ -46,11 +71,10 @@ def add_account(name: str, nickname: str = "") -> dict:
         "name": name,
         "nickname": nickname or name,
         "profile_dir": str(profile_dir),
-        "created_at": "",
+        "created_at": _timestamp(),
         "last_login": "",
     }
     data["accounts"][name] = account
-    data["accounts"][name]["created_at"] = _timestamp()
     save_accounts(data)
     return {"success": True, "account": data["accounts"][name]}
 
