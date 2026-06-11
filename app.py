@@ -58,21 +58,17 @@ def main():
         from PIL import Image, ImageDraw
         import pystray
 
-        # Tray icon: load ICO, convert to RGBA, resize to tray size
-        _exe_dir = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
+        # Tray icon: load ICO via BytesIO (avoid Permission denied on bundled file)
         icon_path = (Path(sys._MEIPASS) / "icon.ico") if hasattr(sys, '_MEIPASS') else (Path(__file__).parent / "icon.ico")
         icon_img = None
         if icon_path.exists():
             try:
-                raw = Image.open(str(icon_path))
+                from io import BytesIO
+                raw = Image.open(BytesIO(icon_path.read_bytes()))
                 raw.load()
                 icon_img = raw.convert("RGBA").resize((64, 64), Image.LANCZOS)
-            except Exception as _icon_err:
-                try: (_exe_dir / "icon_error.txt").write_text(str(_icon_err), encoding="utf-8")
-                except Exception: pass
-        else:
-            try: (_exe_dir / "icon_error.txt").write_text(f"not found: {icon_path}", encoding="utf-8")
-            except Exception: pass
+            except Exception:
+                pass
         if icon_img is None:
             icon_img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
             ImageDraw.Draw(icon_img).ellipse([2, 2, 62, 62], fill=(130, 198, 83))
