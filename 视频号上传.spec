@@ -2,12 +2,45 @@
 
 
 import os as _os
-_msroot = _os.path.expandvars(r'%LOCALAPPDATA%\ms-playwright')
-_ms_browsers = [
-    (_msroot + '/chromium_headless_shell-1208', 'ms-playwright/chromium_headless_shell-1208'),
-    (_msroot + '/ffmpeg-1011', 'ms-playwright/ffmpeg-1011'),
-    (_msroot + '/winldd-1007', 'ms-playwright/winldd-1007'),
-]
+import sys as _sys
+import shutil as _shutil
+from pathlib import Path as _Path
+
+# === CloakBrowser stealth Chromium — 仅删语言包 ===
+_cb_datas = []
+try:
+    from cloakbrowser.download import binary_info as _cb_info
+    _cb_src = _Path(_cb_info()['cache_dir'])
+    if _cb_src.exists():
+        _staging = _Path(SPECPATH) / '_cloak_staging'
+        if _staging.exists():
+            _shutil.rmtree(_staging)
+        _staging.mkdir(parents=True)
+        for _f in _cb_src.iterdir():
+            if _f.is_dir() and _f.name == 'locales':
+                _loc_dst = _staging / 'locales'
+                _loc_dst.mkdir()
+                _zh = _f / 'zh-CN.pak'
+                if _zh.exists():
+                    _shutil.copy2(_zh, _loc_dst / 'zh-CN.pak')
+                continue
+            elif _f.is_dir():
+                _shutil.copytree(_f, _staging / _f.name)
+            else:
+                _shutil.copy2(_f, _staging / _f.name)
+        _cb_datas = [(_os.fspath(_staging), 'cloakbrowser')]
+except Exception:
+    pass
+
+# === Playwright driver（CloakBrowser 底层依赖）===
+_pw_driver = []
+try:
+    import playwright as _pw
+    _pw_dir = _Path(_pw.__file__).parent / 'driver'
+    if _pw_dir.exists():
+        _pw_driver = [(_os.fspath(_pw_dir), 'playwright/driver')]
+except Exception:
+    pass
 
 a = Analysis(
     [_os.path.join(SPECPATH, 'app.py')],
@@ -15,10 +48,10 @@ a = Analysis(
     binaries=[],
     datas=[
         (_os.path.join(SPECPATH, 'templates'), 'templates'),
-        (_os.path.join(SPECPATH, 'icon.ico'), 'icon.ico'),
-        (_os.path.join(SPECPATH, 'icon.svg'), 'icon.svg'),
-    ] + _ms_browsers,
-    hiddenimports=['accounts', 'uploader', 'logger', 'plyer', 'pystray', 'PIL'],
+        (_os.path.join(SPECPATH, 'icon.ico'), '.'),
+        (_os.path.join(SPECPATH, 'icon.svg'), '.'),
+    ] + _cb_datas + _pw_driver,
+    hiddenimports=['accounts', 'uploader', 'logger', 'plyer', 'pystray', 'PIL', 'cloakbrowser'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
@@ -52,6 +85,6 @@ coll = COLLECT(
     a.datas,
     strip=False,
     upx=True,
-    upx_exclude=[],
+    upx_exclude=['cloakbrowser'],
     name='视频号上传',
 )

@@ -18,6 +18,7 @@ accounts/*/auth.json
 data/accounts.json
 build/
 dist/
+dist_cb*/
 *.spec
 .worktrees/
 data/test_*/

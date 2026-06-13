@@ -97,7 +97,7 @@ _sound_enabled = True
 
 
 def _notify_upload_complete(account_name: str, total: int):
-    """Upload complete: system notification + optional sound."""
+    """Upload complete: 原生 Windows 弹窗 + 系统提示音"""
     state = _get_or_create_account_state(account_name)
     queue = state.get("_video_queue", [])
     failed = sum(1 for v in queue
@@ -109,16 +109,10 @@ def _notify_upload_complete(account_name: str, total: int):
     if failed > 0:
         msg += f"，{failed} 个失败"
 
-    try:
-        from plyer import notification
-        notification.notify(
-            title="视频号上传",
-            message=msg,
-            app_name="视频号上传",
-            timeout=5,
-        )
-    except Exception:
-        pass
+    import ctypes, threading
+    def _show():
+        ctypes.windll.user32.MessageBoxW(0, msg, f"视频号上传 - {account_name}", 0x00040040)  # MB_OK|MB_ICONINFORMATION
+    threading.Thread(target=_show, daemon=True).start()
 
     if _sound_enabled:
         try:
@@ -183,12 +177,6 @@ atexit.register(_cleanup_uploaders)
 async def _async_set_event(ev: asyncio.Event):
     ev.set()
 
-def _resolve_executable_path(headless: bool) -> str:
-    """有头模式时查找系统浏览器路径；未找到返回空串"""
-    if headless:
-        return ""
-    return WeChatUploader.find_system_browser()
-
 
 async def _run_account_upload(account_name: str, profile_dir: Path, headless: bool):
     """Process the full video queue for one account, respecting cancel/skip/semaphore."""
@@ -223,13 +211,7 @@ async def _run_account_upload(account_name: str, profile_dir: Path, headless: bo
                     uploader = None
 
             if uploader is None:
-                exe_path = _resolve_executable_path(headless)
-                if not headless and not exe_path:
-                    state["status"] = "缺少浏览器"
-                    _add_log(account_name, "有头模式需要系统浏览器(Chrome/Edge)，未找到，请安装 Chrome")
-                    state["running"] = False
-                    return
-                uploader = WeChatUploader(profile_dir, headless=headless, executable_path=exe_path)
+                uploader = WeChatUploader(profile_dir, headless=headless)
                 await uploader.start()
                 if cancel_ev.is_set():
                     await uploader.close()
@@ -424,17 +406,23 @@ def api_open_dashboard(name):
     if not profile_dir:
         return jsonify({"error": f"账号 {name} 不存在"}), 404
 
-    exe_path = _resolve_executable_path(False)
-    if not exe_path:
-        return jsonify({"error": "有头模式需要系统浏览器(Chrome/Edge)，未找到，请安装 Chrome"}), 400
 
     def do_open():
         async def _open():
-            uploader = WeChatUploader(profile_dir, headless=False, executable_path=exe_path)
+            uploader = WeChatUploader(profile_dir, headless=False)
             try:
                 await uploader.start()
                 page = await uploader._context.new_page()
-                await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=30000)
+                await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=60000)
+                # 等待 SPA 页面 JS 渲染完成 — 等关键元素出现
+                try:
+                    await page.locator(SEL_ACCOUNT_INFO).wait_for(state="visible", timeout=30000)
+                except Exception:
+                    pass
+                try:
+                    await page.locator(SEL_UPLOAD_ZONE).wait_for(state="attached", timeout=30000)
+                except Exception:
+                    pass
                 # 不调用 uploader.close()，窗口保持打开供用户操作
             except Exception as e:
                 log.error(f"打开后台失败 [{name}]: {e}", exc_info=True)
@@ -449,20 +437,35 @@ def api_login_account(name):
     if not profile_dir:
         return jsonify({"error": f"账号 {name} 不存在"}), 404
 
-    exe_path = _resolve_executable_path(False)
-    if not exe_path:
-        return jsonify({"error": "有头模式需要系统浏览器(Chrome/Edge)，未找到，请安装 Chrome"}), 400
 
     def do_login():
         async def _login():
-            uploader = WeChatUploader(profile_dir, headless=False, executable_path=exe_path)
+            uploader = WeChatUploader(profile_dir, headless=False)
             try:
                 await uploader.start()
                 success = await uploader.ensure_login(timeout_seconds=180)
-                if success:
-                    account_mgr.update_last_login(name)
-                else:
+                if not success:
                     account_mgr.clear_last_login(name)
+                    return
+                # 校验重新登录的账号与已记录账号是否一致
+                acct = account_mgr.get_account(name)
+                if acct:
+                    page = await uploader._context.new_page()
+                    await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=30000)
+                    try:
+                        await page.locator(SEL_ACCOUNT_INFO).wait_for(state="visible", timeout=15000)
+                        nickname = await uploader.scrape_nickname(page)
+                        await page.close()
+                        recorded = (acct.get("nickname") or "").strip()
+                        current = (nickname or "").strip()
+                        if recorded and current and recorded != current:
+                            log.warning(f"[登录] 账号名不匹配: 已记录={recorded}, 当前={current}")
+                            account_mgr.clear_last_login(name)
+                            return
+                    except Exception as e:
+                        log.warning(f"[登录] 昵称校验失败: {e}")
+                        await page.close() if page else None
+                account_mgr.update_last_login(name)
             except Exception as e:
                 log.error(f"登录失败 [{name}]: {e}", exc_info=True)
             finally:
@@ -629,7 +632,7 @@ def api_add_account_with_scan():
                 _scan_state["_page"] = page
 
                 await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=60000)
-                await page.wait_for_timeout(2000)
+                await page.wait_for_timeout(3000)
 
                 # 已有登录 session → 直接抓昵称创建账号
                 if await page.locator(SEL_ACCOUNT_INFO).count() > 0:
@@ -738,8 +741,10 @@ def api_add_account_with_scan():
                     "account": result.get("account", {"name": safe_name, "nickname": nickname}),
                 }
             except Exception as e:
-                log.error(f"扫码添加账号失败: {e}", exc_info=True)
-                _scan_state["result"] = {"error": str(e)}
+                import traceback as _tb
+                _full_tb = _tb.format_exc()
+                log.error(f"扫码添加账号失败: {e}\n{_full_tb}")
+                _scan_state["result"] = {"error": str(e), "traceback": _full_tb}
             finally:
                 _scan_state["scanning"] = False
                 if page:
@@ -818,6 +823,37 @@ def api_upload_temp():
     dest = TEMP_DIR / f"{uuid.uuid4().hex[:8]}_{safe_name}"
     f.save(str(dest))
     return jsonify({"path": str(dest), "name": f.filename})
+
+# ===== 窗口控制（由 app.py 注入 _main_window / _tray_exit） =====
+_main_window = None
+_tray_exit = None
+
+@app.route("/api/window/show", methods=["POST"])
+def api_window_show():
+    """将窗口提到最前"""
+    if _main_window:
+        try:
+            _main_window.show()
+        except Exception:
+            pass
+    return jsonify({"ok": True})
+
+@app.route("/api/window/minimize", methods=["POST"])
+def api_window_minimize():
+    """隐藏窗口到托盘"""
+    if _main_window:
+        try:
+            _main_window.hide()
+        except Exception:
+            pass
+    return jsonify({"ok": True})
+
+@app.route("/api/window/exit", methods=["POST"])
+def api_window_exit():
+    """退出程序"""
+    if _tray_exit:
+        _tray_exit()
+    return jsonify({"ok": True})
 
 def main():
     import argparse

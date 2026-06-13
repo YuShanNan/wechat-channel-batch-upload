@@ -1,6 +1,6 @@
 """
 视频号批量上传核心引擎
-基于 Playwright Python 异步 API
+基于 CloakBrowser (stealth Chromium)
 """
 from __future__ import annotations
 
@@ -21,7 +21,8 @@ sys.stdout.reconfigure(encoding='utf-8') if sys.stdout else None
 log = get_logger("uploader")
 
 if TYPE_CHECKING:
-    from playwright.async_api import Page, BrowserContext, Frame
+    from cloakbrowser import BrowserContext as CloakContext
+    from playwright.async_api import Page, Frame
 
 CREATE_URL = "https://channels.weixin.qq.com/platform/post/create"
 _WIDTH_RE = re.compile(r"width:\s*([\d.]+)%")
@@ -56,7 +57,7 @@ SEL_DATETIME_INPUT = 'input[type="datetime-local"]'
 class WeChatUploader:
     """
     视频号上传器
-    每个实例绑定一个账号 profile 目录
+    每个实例绑定一个账号 profile 目录，使用 CloakBrowser 反检测浏览器
     """
 
     def __init__(self, profile_dir: Path, headless: bool = True, executable_path: str = ""):
@@ -64,54 +65,27 @@ class WeChatUploader:
         self.profile_dir.mkdir(parents=True, exist_ok=True)
         self.headless = headless
         self._executable_path = executable_path
-        self._context: Optional[BrowserContext] = None
+        self._context: Optional[CloakContext] = None
         self._upload_progress = 0
 
     @staticmethod
     def find_system_browser() -> str:
-        """在 Windows 上查找系统 Chrome/Edge 路径，用于有头模式。返回空串表示未找到。"""
-        candidates = [
-            os.path.expandvars(r"%PROGRAMFILES%\Google\Chrome\Application\chrome.exe"),
-            os.path.expandvars(r"%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe"),
-            os.path.expandvars(r"%PROGRAMFILES(X86)%\Microsoft\Edge\Application\msedge.exe"),
-            os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\Application\msedge.exe"),
-        ]
-        for p in candidates:
-            if os.path.isfile(p):
-                return p
+        """CloakBrowser 自带浏览器，此方法保留兼容但不再使用"""
         return ""
 
     async def start(self):
-        """启动浏览器。headless=True 时用 --headless=new 避免任务栏图标。"""
-        from playwright.async_api import async_playwright
+        """启动 CloakBrowser。headless=True 时使用无头模式。"""
+        from cloakbrowser import launch_persistent_context_async
 
-        pw = await async_playwright().start()
-        args = [
-            "--mute-audio",
-            "--disable-blink-features=AutomationControlled",
-            "--no-sandbox",
-            "--disable-dev-shm-usage",
-            "--no-proxy-server",
-            "--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36",
-        ]
-        if not self.headless:
-            args.extend(["--window-position=100,100", "--window-size=1200,800"])
-            self._reset_window_state()
         kwargs = dict(
             user_data_dir=str(self.profile_dir),
             headless=self.headless,
             viewport={"width": 1440, "height": 900},
             locale="zh-CN",
-            args=args,
         )
-        if self._executable_path:
-            kwargs["executable_path"] = self._executable_path
-        self._context = await pw.chromium.launch_persistent_context(**kwargs)
-        await self._context.add_init_script("""
-            Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
-            Object.defineProperty(navigator, 'plugins', {get: () => [1, 2, 3, 4, 5]});
-            window.chrome = {runtime: {}};
-        """)
+        if not self.headless:
+            kwargs["args"] = ["--window-position=100,100", "--window-size=1200,800"]
+        self._context = await launch_persistent_context_async(**kwargs)
         return self
 
     def _reset_window_state(self):
@@ -578,24 +552,26 @@ class WeChatUploader:
         if not search_box:
             raise RuntimeError("未找到搜索框")
 
+        # 清空并逐字输入（fill 不触发 Vue 搜索事件）
+        await search_box.click()
+        await page.wait_for_timeout(300)
+        await search_box.click(click_count=3)  # 三击全选
+        await page.keyboard.press("Backspace")
+        await page.wait_for_timeout(200)
+        await page.keyboard.type(drama_name, delay=120)
+        await page.wait_for_timeout(800)
+        await page.keyboard.press("Enter")
+        # 等搜索请求完成 — 先等 loading 出现再等消失
         try:
-            await search_box.click()
-            await search_box.fill("")
-            await page.keyboard.type(drama_name, delay=80)
-            await page.keyboard.press("Enter")
-            try:
-                await page.locator(SEL_LOADING).wait_for(state="visible", timeout=2000)
-                await page.locator(SEL_LOADING).wait_for(state="hidden", timeout=5000)
-            except Exception as e:
-                log.debug(f"非关键操作失败: {e}")
-            await page.wait_for_timeout(1000)
+            await page.locator(SEL_LOADING).wait_for(state="visible", timeout=3000)
+            await page.locator(SEL_LOADING).wait_for(state="hidden", timeout=10000)
         except Exception:
-            raise RuntimeError("搜索框输入失败")
-
-        # 等待搜索结果出现，有结果则选第一个
+            pass
+        await page.wait_for_timeout(500)
+        # 选第一个结果
         try:
             first_row = page.locator(SEL_DRAMA_ROW).first
-            await first_row.wait_for(state="attached", timeout=8000)
+            await first_row.wait_for(state="attached", timeout=5000)
             await first_row.evaluate("el => el.click()")
             await page.wait_for_timeout(500)
             log.info(f"已选择短剧: {drama_name}")

@@ -3,6 +3,7 @@
 使用 pywebview (Edge WebView2)，需 Python 3.11+
 启动: python app.py
 """
+import ctypes
 import os
 import sys
 import threading
@@ -13,11 +14,93 @@ from pathlib import Path
 PORT = 5050
 URL = f"http://127.0.0.1:{PORT}"
 
-# 分发兼容：EXE 自带 Chromium 浏览器，运行时指定路径
+# ===== 单实例：已运行时提到最前，不打开新窗口 =====
+def _bring_existing_to_front():
+    """通过 Flask API 让已有进程自己显示窗口（最可靠）"""
+    try:
+        import json
+        resp = urllib.request.urlopen(f"{URL}/api/window/show", timeout=2)
+        data = json.loads(resp.read())
+        return data.get("ok", False)
+    except Exception:
+        pass
+
+    # 兜底：Win32 方式
+    user32 = ctypes.windll.user32
+    WNDENUMPROC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_ulong, ctypes.c_ulong)
+    found = []
+
+    def _enum_cb(hwnd, _lparam):
+        length = user32.GetWindowTextLengthW(hwnd)
+        if length == 0:
+            return True
+        buf = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buf, length + 1)
+        if "视频号上传" in buf.value:
+            found.append(hwnd)
+            return False
+        return True
+
+    user32.EnumWindows(WNDENUMPROC(_enum_cb), 0)
+    if not found:
+        return False
+    hwnd = found[0]
+    user32.ShowWindow(hwnd, 5)  # SW_SHOW
+    if user32.IsIconic(hwnd):
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+    kernel32 = ctypes.windll.kernel32
+    fg_thread = user32.GetWindowThreadProcessId(hwnd, 0)
+    cur_thread = kernel32.GetCurrentThreadId()
+    user32.AttachThreadInput(cur_thread, fg_thread, True)
+    user32.SetForegroundWindow(hwnd)
+    user32.BringWindowToTop(hwnd)
+    user32.AttachThreadInput(cur_thread, fg_thread, False)
+    return True
+
+_MUTEX_NAME = "Global\\WeChatVideoUploader_SingleInstance_9a3f2"
+_kernel32 = ctypes.windll.kernel32
+_kernel32.CreateMutexW(None, False, _MUTEX_NAME)
+if _kernel32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+    if _bring_existing_to_front():
+        sys.exit(0)
+    # 如果 API 和 Win32 都失败，尝试等待一下再退出
+    time.sleep(0.5)
+    sys.exit(1)
+# ===== 单实例结束 =====
+
+# 分发兼容：EXE 自带 CloakBrowser + Playwright driver
 if getattr(sys, 'frozen', False):
-    _bundled = Path(sys._MEIPASS) / "ms-playwright"
-    if _bundled.exists():
-        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(_bundled)
+    _cb = Path(sys._MEIPASS) / "cloakbrowser" / "chrome.exe"
+    if _cb.exists():
+        os.environ["CLOAKBROWSER_BINARY_PATH"] = str(_cb)
+
+    # 修正 playwright driver 路径（PYZ 归档中路径解析会失败）
+    try:
+        import playwright._impl._driver as _pw_driver
+        def _patched_compute_driver():
+            driver_path = Path(sys._MEIPASS) / "playwright" / "driver"
+            cli_path = str(driver_path / "package" / "cli.js")
+            if sys.platform == "win32":
+                return (
+                    os.environ.get("PLAYWRIGHT_NODEJS_PATH", str(driver_path / "node.exe")),
+                    cli_path,
+                )
+            return (os.environ.get("PLAYWRIGHT_NODEJS_PATH", str(driver_path / "node")), cli_path)
+        _pw_driver.compute_driver_executable = _patched_compute_driver
+    except Exception:
+        pass
+
+    # 诊断日志
+    _diag_msgs = [
+        f"[DIAG] MEIPASS={sys._MEIPASS}",
+        f"[DIAG] CLOAKBROWSER_BINARY_PATH={os.environ.get('CLOAKBROWSER_BINARY_PATH', 'UNSET')}",
+        f"[DIAG] chrome.exe exists={_cb.exists()}",
+    ]
+    _log_dir = Path(sys.executable).parent / "data" / "logs"
+    _log_dir.mkdir(parents=True, exist_ok=True)
+    _diag_log = _log_dir / "diag.log"
+    with open(_diag_log, "w", encoding="utf-8") as _f:
+        _f.write("\n".join(_diag_msgs))
 
 
 def wait_for_flask():
@@ -95,8 +178,11 @@ def main():
                     return
 
             icon.stop()
-            window.destroy()
-            sys.exit(0)
+            try:
+                window.destroy()
+            except Exception:
+                pass
+            os._exit(0)
 
         tray_icon = pystray.Icon(
             "wechat_uploader",
@@ -116,9 +202,18 @@ def main():
         window.events.closing += _on_closing
 
         # Expose window + tray exit to web_server
+        # 前端已验证过上传状态，后端不再重复 HTTP 检查（避免 Flask 死锁）
+        def _force_exit():
+            icon.stop()
+            try:
+                window.destroy()
+            except Exception:
+                pass
+            os._exit(0)
+
         import web_server
         web_server._main_window = window
-        web_server._tray_exit = lambda: on_tray_exit(None, None)
+        web_server._tray_exit = _force_exit
 
         # Run tray in daemon thread so it doesn't block webview.start()
         threading.Thread(target=tray_icon.run, daemon=True).start()

@@ -21,8 +21,12 @@
     --badge-fail-bg: #3a1a1a; --badge-fail-text: #df7d7d;
   }
   *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
-  html{font-size:15px}
+  html{font-size:15px;color-scheme:light dark}
   body{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg);color:var(--text);min-height:100vh;-webkit-user-select:text;user-select:text}
+  ::-webkit-scrollbar{width:6px;height:6px}
+  ::-webkit-scrollbar-track{background:var(--bar-track)}
+  ::-webkit-scrollbar-thumb{background:var(--border);border-radius:3px}
+  ::-webkit-scrollbar-thumb:hover{background:var(--text2)}
 
   .main{max-width:1060px;margin:0 auto;padding:24px;display:grid;grid-template-columns:1fr 340px;gap:24px}
   .left,.right{display:flex;flex-direction:column;gap:16px}
@@ -145,7 +149,7 @@
   .acct-table .acct-actions{display:flex;gap:6px}
   .acct-empty{padding:24px;text-align:center;color:var(--text2);font-size:13px}
 
-  .debug-toggle{position:absolute;left:8px;bottom:8px;font-size:10px;color:var(--text2);cursor:pointer;user-select:none;z-index:200;transition:color .2s}
+  .debug-toggle{position:fixed;left:216px;bottom:8px;font-size:10px;color:var(--text2);cursor:pointer;user-select:none;z-index:200;transition:color .2s}
   .debug-toggle:hover{color:var(--label)}
   .debug-toggle.active{color:var(--green)}
 
@@ -222,7 +226,7 @@
     <div id="main-content" style="display:none">
     </div>
     <div class="debug-toggle" id="debug-toggle" onclick="toggleDebug()" title="切换有头/无头浏览器">debug</div>
-    <span class="debug-toggle" id="sound-toggle" onclick="toggleSound()" title="关闭提示音" style="left:60px">提示音</span>
+    <span class="debug-toggle" id="sound-toggle" onclick="toggleSound()" title="关闭提示音" style="left:270px">提示音</span>
   </div>
 </div>
 
@@ -317,13 +321,49 @@ function initAccountState(name) {
 
 // ==================== 账号加载与侧边栏 ====================
 async function loadAccounts() {
-  const res = await fetch('/api/accounts');
-  const data = await res.json();
-  accounts = data.accounts || [];
-  renderSidebar();
-  refreshAccountTable();
+  try {
+    const res = await fetch('/api/accounts');
+    const data = await res.json();
+    accounts = data.accounts || [];
+    _lastSidebarHTML = '';  // 强制刷新，避免缓存导致不更新
+    renderSidebar();
+    refreshAccountTable();
+  } catch (e) {
+    console.error('loadAccounts 失败:', e);
+  }
 }
-loadAccounts();
+loadAccounts().then(() => {
+  // 启动后自动静默检测已登录账号有效性
+  if (accounts.some(a => a.last_login)) silentCheckAccounts();
+});
+
+// === 静默检测（启动时自动运行，无 toast）===
+let _silentCheckRunning = false;
+async function silentCheckAccounts() {
+  if (_silentCheckRunning) return;
+  _silentCheckRunning = true;
+  try {
+    const res = await fetch('/api/accounts/check', { method: 'POST' });
+    if (res.status !== 202) { _silentCheckRunning = false; return; }
+    function poll() {
+      _checkPollTimer = setTimeout(async () => {
+        try {
+          const sr = await fetch('/api/accounts/check/status');
+          const st = await sr.json();
+          refreshAccountTable(st.results);
+          if (st.done) {
+            await loadAccounts();
+            renderSidebar();
+            _silentCheckRunning = false;
+            return;
+          }
+          poll();
+        } catch (e) { poll(); }
+      }, 2000);
+    }
+    poll();
+  } catch (e) { _silentCheckRunning = false; }
+}
 
 let _lastSidebarHTML = '';
 function renderSidebar() {
@@ -418,7 +458,10 @@ function renderMainContent() {
           </div>
         </div>
         <div class="card">
-          <div class="card-title">上传队列 (<span id="queue-count">0</span>)</div>
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+            <div class="card-title" style="margin-bottom:0">上传队列 (<span id="queue-count">0</span>)</div>
+            <button class="btn-sm" style="background:var(--border);color:var(--label);padding:4px 10px;font-size:11px" onclick="clearQueue()">清空队列</button>
+          </div>
           <div class="queue-row" id="queue-row"></div>
         </div>
       </div>
@@ -642,7 +685,7 @@ function renderQueueForAccount() {
       const h = v.cardHeight || 78;
       return '<div id="qw-' + i + '" style="display:flex;flex-direction:column;align-items:center;gap:2px" onclick="updatePreview(' + i + ')" draggable="true" onDragStart="onDragStart(event,' + i + ')" onDragOver="onDragOver(event)" onDrop="onDrop(event,' + i + ')" onDragEnd="onDragEnd(event)">'
         + '<div class="queue-card' + (i === 0 ? ' active' : '') + '" id="qc-' + i + '" style="width:' + W + 'px;height:' + h + 'px">'
-        + (src ? '<video class="qc-thumb" id="qcv-' + i + '" src="' + src + '" preload="metadata" muted onloadedmetadata="setCardHeight(this,document.getElementById(\'qc-' + i + '\'),' + i + ')"></video>' : '<div class="qc-thumb" id="qcv-' + i + '" style="display:flex;align-items:center;justify-content:center;color:#666;font-size:11px">...</div>')
+        + (src ? '<video class="qc-thumb" id="qcv-' + i + '" src="' + src + '" preload="auto" muted playsinline onloadedmetadata="setCardHeight(this,document.getElementById(\'qc-' + i + '\'),' + i + ')" onloadeddata="captureThumb(this,' + i + ')"></video>' : '<div class="qc-thumb" id="qcv-' + i + '" style="display:flex;align-items:center;justify-content:center;color:#666;font-size:11px">...</div>')
         + (cls ? '<div class="qc-status ' + cls + '">' + (cls === 'done' ? '✓' : '✗') + '</div>' : '')
         + '<div class="qc-remove" onclick="event.stopPropagation();removeFromQueue(' + i + ')">✕</div>'
         + '</div><div class="qc-name" title="' + v.name + '">' + v.name + '</div></div>';
@@ -686,8 +729,32 @@ function setCardHeight(vel, card, i) {
   }
 }
 
+function captureThumb(vel, i) {
+  const st = accountStates[currentAccount];
+  if (!st || st.videoQueue[i]._thumbed) return;
+  st.videoQueue[i]._thumbed = true;
+  try {
+    const cvs = document.createElement('canvas');
+    cvs.width = vel.videoWidth;
+    cvs.height = vel.videoHeight;
+    const ctx = cvs.getContext('2d');
+    ctx.drawImage(vel, 0, 0);
+    vel.setAttribute('poster', cvs.toDataURL('image/jpeg', 0.7));
+    vel.style.objectFit = 'cover';
+  } catch(e) {}
+}
+
 function removeFromQueue(i) {
   accountStates[currentAccount].videoQueue.splice(i, 1);
+  renderQueueForAccount();
+}
+
+function clearQueue() {
+  if (!currentAccount) return;
+  const st = accountStates[currentAccount];
+  if (!st.videoQueue.length) return;
+  if (!confirm('确定清空全部 ' + st.videoQueue.length + ' 个视频？')) return;
+  st.videoQueue = [];
   renderQueueForAccount();
 }
 
@@ -758,7 +825,7 @@ function updatePreview(i) {
   const qc = document.getElementById('qc-' + i);
   if (qcv && qc && !st.videoQueue[i].cardHeight) {
     if (qcv.readyState >= 1) setCardHeight(qcv, qc, i);
-    else { qcv.preload = 'metadata'; qcv.addEventListener('loadedmetadata', () => setCardHeight(qcv, qc, i), { once: true }); }
+    else { qcv.addEventListener('loadedmetadata', () => setCardHeight(qcv, qc, i), { once: true }); }
   }
   if (loading) return;
   loading = true;
@@ -1001,10 +1068,19 @@ async function checkAccounts() {
   btn.style.opacity = '0.7';
   btn.style.boxShadow = 'inset 0 2px 4px rgba(0,0,0,.2)';
   btn.style.cursor = 'not-allowed';
+
+  function restoreBtn() {
+    btn.disabled = false;
+    btn.textContent = '检测';
+    btn.style.opacity = '';
+    btn.style.boxShadow = '';
+    btn.style.cursor = '';
+  }
+
   try {
     const res = await fetch('/api/accounts/check', { method: 'POST' });
     const data = await res.json();
-    if (res.status !== 202) { toast(data.error || data.message || '检测启动失败'); return; }
+    if (res.status !== 202) { toast(data.error || data.message || '检测启动失败'); restoreBtn(); return; }
 
     function poll() {
       _checkPollTimer = setTimeout(async () => {
@@ -1023,6 +1099,7 @@ async function checkAccounts() {
             }
             refreshAccountTable(null);
             renderSidebar();
+            restoreBtn();
             return;
           }
           poll();
@@ -1032,12 +1109,7 @@ async function checkAccounts() {
     poll();
   } catch (e) {
     toast('检测请求失败');
-  } finally {
-    btn.disabled = false;
-    btn.textContent = '检测';
-    btn.style.opacity = '';
-    btn.style.boxShadow = '';
-    btn.style.cursor = '';
+    restoreBtn();
   }
 }
 
@@ -1052,6 +1124,7 @@ function openQrcodeModal() {
 function closeQrcodeModal() {
   document.getElementById('qrcode-overlay').classList.remove('show');
   if (qrcodeTimer) { clearTimeout(qrcodeTimer); qrcodeTimer = null; }
+  loadAccounts();  // 兜底刷新，确保扫码后列表更新
 }
 async function cancelScan() {
   await fetch('/api/accounts/add-with-scan/cancel', { method: 'POST' });
@@ -1075,23 +1148,30 @@ const _qrcodeStatusMap = {
   cancelled: '已取消',
 };
 async function pollQrcodeStatus() {
-  const sr = await fetch('/api/accounts/add-with-scan/status');
-  const st = await sr.json();
-  const img = document.getElementById('qrcode-img');
-  const spinner = document.getElementById('qrcode-spinner');
-  const statusText = document.getElementById('qrcode-status-text');
-  if (st.qrcode) { img.src = st.qrcode; img.style.display = ''; spinner.style.display = 'none'; }
-  statusText.textContent = _qrcodeStatusMap[st.status] || st.status;
-  if (!st.scanning) {
-    spinner.style.display = 'none';
-    if (st.result && st.result.success) { await loadAccounts(); setTimeout(closeQrcodeModal, 1500); }
-    else {
-      statusText.textContent = st.result && st.result.error ? st.result.error : '未知错误';
-      setTimeout(closeQrcodeModal, 3000);
+  try {
+    const sr = await fetch('/api/accounts/add-with-scan/status');
+    const st = await sr.json();
+    const img = document.getElementById('qrcode-img');
+    const spinner = document.getElementById('qrcode-spinner');
+    const statusText = document.getElementById('qrcode-status-text');
+    if (st.qrcode) { img.src = st.qrcode; img.style.display = ''; spinner.style.display = 'none'; }
+    statusText.textContent = _qrcodeStatusMap[st.status] || st.status;
+    if (!st.scanning) {
+      spinner.style.display = 'none';
+      if (st.result && st.result.success) {
+        await loadAccounts();
+        setTimeout(closeQrcodeModal, 1500);
+      } else {
+        statusText.textContent = st.result && st.result.error ? st.result.error : '未知错误';
+        setTimeout(closeQrcodeModal, 3000);
+      }
+      return;
     }
-    return;
+    qrcodeTimer = setTimeout(pollQrcodeStatus, 1000);
+  } catch (e) {
+    console.error('pollQrcodeStatus 失败:', e);
+    qrcodeTimer = setTimeout(pollQrcodeStatus, 1000);
   }
-  qrcodeTimer = setTimeout(pollQrcodeStatus, 1000);
 }
 
 async function deleteAccount(name) {
