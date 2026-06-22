@@ -227,6 +227,10 @@ async def _qr_login_and_wait(page, uploader, timeout_s: int = 180,
     if await page.locator(SEL_ACCOUNT_INFO).count() > 0:
         return True
 
+    # 标记活跃，前端开始轮询等待
+    qr_state["active"] = True
+    qr_state["status"] = "loading"
+
     # 截图 QR（最多重试 10 次）
     qrcode = None
     for _ in range(10):
@@ -236,12 +240,12 @@ async def _qr_login_and_wait(page, uploader, timeout_s: int = 180,
         except Exception:
             await page.wait_for_timeout(1000)
     if not qrcode:
+        qr_state["active"] = False
         return False
 
-    # 推 QR 到 qr_state（供前端轮询）
+    # 推 QR 到 qr_state（供前端展示）
     qr_state["qrcode"] = qrcode
     qr_state["status"] = "waiting"
-    qr_state["active"] = True
 
     try:
         for _ in range(timeout_s * 2):  # 0.5s 间隔
