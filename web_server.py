@@ -142,6 +142,13 @@ _scan_state = {
     "_uploader": None,
 }
 
+# 通用 QR 登录状态（扫描 + 上传登录共用）
+qr_state = {
+    "active": False,   # 是否有 QR 登录进行中
+    "status": "",      # waiting|scanned|confirming|expired|logged_in|timeout
+    "qrcode": "",      # base64 data URL
+}
+
 _debug_mode = False
 
 # 持久化事件循环 + uploader 缓存，视频间复用浏览器会话
@@ -212,34 +219,79 @@ def _graceful_shutdown(timeout=10):
     # 3. 关闭所有浏览器并清理锁文件
     _cleanup_uploaders()
 
+async def _qr_login_and_wait(page, uploader, timeout_s: int = 180,
+                              cancel_fn=None) -> bool:
+    """从 headless 浏览器截图 QR → 通过 qr_state 推前端 → 等待扫码。
+    返回 True=登录成功, False=超时/取消/失败。"""
+    # 已登录？
+    if await page.locator(SEL_ACCOUNT_INFO).count() > 0:
+        return True
+
+    # 截图 QR（最多重试 10 次）
+    qrcode = None
+    for _ in range(10):
+        try:
+            qrcode = await uploader.capture_qrcode(page)
+            break
+        except Exception:
+            await page.wait_for_timeout(1000)
+    if not qrcode:
+        return False
+
+    # 推 QR 到 qr_state（供前端轮询）
+    qr_state["qrcode"] = qrcode
+    qr_state["status"] = "waiting"
+    qr_state["active"] = True
+
+    try:
+        for _ in range(timeout_s * 2):  # 0.5s 间隔
+            if cancel_fn and cancel_fn():
+                qr_state["status"] = "cancelled"
+                return False
+
+            if await page.locator(SEL_ACCOUNT_INFO).count() > 0:
+                qr_state["status"] = "logged_in"
+                return True
+
+            # QR 过期 → 刷新
+            try:
+                if await uploader.check_qrcode_expired(page):
+                    qr_state["status"] = "expired"
+                    await page.reload(wait_until="domcontentloaded")
+                    await page.wait_for_timeout(3000)
+                    for _ in range(10):
+                        try:
+                            qrcode = await uploader.capture_qrcode(page)
+                            break
+                        except Exception:
+                            await page.wait_for_timeout(1000)
+                    qr_state["qrcode"] = qrcode
+                    qr_state["status"] = "waiting"
+                    continue
+            except Exception:
+                pass
+
+            # 扫码状态
+            try:
+                scan_status = await uploader.check_qrcode_scanned(page)
+                if scan_status != "waiting":
+                    qr_state["status"] = scan_status
+            except Exception:
+                pass
+
+            await asyncio.sleep(0.5)
+
+        qr_state["status"] = "timeout"
+        return False
+    finally:
+        qr_state["active"] = False
+        qr_state["qrcode"] = ""
+
 async def _async_set_event(ev: asyncio.Event):
     ev.set()
 
 
-async def _check_session_active(profile_dir: Path) -> bool:
-    """快速预检：用无头浏览器探测会话是否有效。
-    返回 True = 会话有效可无头上传，False = 需有头扫码登录。"""
-    from uploader import WeChatUploader, SEL_ACCOUNT_INFO
-    checker = WeChatUploader(profile_dir, headless=True)
-    try:
-        await checker.start()
-        page = await checker._context.new_page()
-        try:
-            await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=20000)
-            await page.locator(SEL_ACCOUNT_INFO).first.wait_for(
-                state="attached", timeout=15000
-            )
-            return True  # 会话有效，可继续无头
-        except Exception:
-            return False  # 需要重新扫码
-        finally:
-            await page.close()
-    except Exception:
-        return False  # 探测失败，走有头模式保底
-    finally:
-        await checker.close()
-
-async def _run_account_upload(account_name: str, profile_dir: Path, headless: bool):
+async def _run_account_upload(account_name: str, profile_dir: Path):
     """Process the full video queue for one account, respecting cancel/skip/semaphore."""
     state = _get_or_create_account_state(account_name)
     state["running"] = True
@@ -273,21 +325,37 @@ async def _run_account_upload(account_name: str, profile_dir: Path, headless: bo
                         uploader = None
 
             if uploader is None:
-                # 快速预检会话是否有效，决定是否需要可见浏览器扫码
-                _effective_headless = headless
-                if headless:
-                    _effective_headless = await _check_session_active(profile_dir)
-
-                uploader = WeChatUploader(profile_dir, headless=_effective_headless)
+                uploader = WeChatUploader(profile_dir, headless=True)
                 await uploader.start()
                 if cancel_ev.is_set():
                     await uploader.close()
                     state["status"] = "已取消"
                     state["running"] = False
                     return
-                if not await uploader.ensure_login():
+
+                # 检测登录状态：未登录 → 前端弹 QR 扫码
+                logged_in = False
+                page = await uploader._context.new_page()
+                try:
+                    await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=30000)
+                    if await page.locator(SEL_ACCOUNT_INFO).count() > 0:
+                        logged_in = True
+                    else:
+                        state["status"] = "等待扫码登录..."
+                        _add_log(account_name, "请扫码登录")
+                        logged_in = await _qr_login_and_wait(page, uploader, timeout_s=120,
+                            cancel_fn=lambda: cancel_ev.is_set())
+                finally:
+                    await page.close()
+
+                if cancel_ev.is_set():
+                    await uploader.close()
+                    state["status"] = "已取消"
+                    state["running"] = False
+                    return
+                if not logged_in:
                     state["status"] = "登录失败"
-                    _add_log(account_name, "登录失败，请先扫码登录")
+                    _add_log(account_name, "登录失败，请重新扫码")
                     await uploader.close()
                     state["running"] = False
                     return
@@ -598,9 +666,8 @@ def api_account_upload_start(name):
             _cooldown_timers[name].cancel()
             del _cooldown_timers[name]
 
-    # Launch upload task on persistent event loop
-    headless = not _debug_mode
-    coro = _run_account_upload(name, Path(profile_dir), headless)
+    # Launch upload task on persistent event loop（永远无头 + 前端 QR 弹窗）
+    coro = _run_account_upload(name, Path(profile_dir))
     task = asyncio.run_coroutine_threadsafe(coro, _event_loop)
     state["_task"] = task
 
@@ -736,75 +803,16 @@ def api_add_account_with_scan():
                     _scan_state["scanning"] = False
                     return
 
-                # 截取二维码（重试等待 iframe 加载）
-                qrcode = None
-                for attempt in range(10):
-                    try:
-                        qrcode = await uploader.capture_qrcode(page)
-                        break
-                    except Exception as e:
-                        log.warning(f"二维码获取失败: {e}")
-                        await page.wait_for_timeout(1000)
-                if not qrcode:
-                    _scan_state["result"] = {"error": "无法获取二维码"}
-                    _scan_state["scanning"] = False
-                    return
-
-                _scan_state["qrcode"] = qrcode
+                # 统一 QR 登录等待（截图 + 推前端 + 等扫码）
                 _scan_state["status"] = "waiting"
-
-                # 轮询等待扫码（180s 超时，0.5s 间隔）
-                for i in range(360):
-                    # 检测取消
-                    if _scan_state["cancelled"]:
-                        log.info("[QR] 用户取消扫码")
-                        _scan_state["status"] = "cancelled"
-                        _scan_state["result"] = {"error": "用户取消"}
-                        _scan_state["scanning"] = False
-                        return
-
-                    # 检测登录成功
-                    if await page.locator(SEL_ACCOUNT_INFO).count() > 0:
-                        log.info("[QR] 登录成功！")
-                        _scan_state["status"] = "logged_in"
-                        break
-
-                    # 检测二维码过期 → 刷新
-                    try:
-                        if await uploader.check_qrcode_expired(page):
-                            log.info("[QR] 二维码过期，刷新中...")
-                            _scan_state["status"] = "expired"
-                            await page.reload(wait_until="domcontentloaded")
-                            await page.wait_for_timeout(3000)
-                            for attempt2 in range(10):
-                                try:
-                                    qrcode = await uploader.capture_qrcode(page)
-                                    break
-                                except Exception as e:
-                                    log.warning(f"二维码获取失败: {e}")
-                                    await page.wait_for_timeout(1000)
-                            _scan_state["qrcode"] = qrcode
-                            _scan_state["status"] = "waiting"
-                            continue
-                    except Exception as e:
-                        log.debug(f"非关键操作失败: {e}")
-                        pass
-
-                    # 检测扫码状态
-                    try:
-                        scan_status = await uploader.check_qrcode_scanned(page)
-                        if scan_status in ("scanned", "confirming"):
-                            _scan_state["status"] = scan_status
-                    except Exception as e:
-                        log.debug(f"非关键操作失败: {e}")
-                        pass
-
-                    await asyncio.sleep(0.5)
-                else:
-                    _scan_state["status"] = "timeout"
-                    _scan_state["result"] = {"error": "登录超时"}
+                ok = await _qr_login_and_wait(page, uploader, timeout_s=180,
+                    cancel_fn=lambda: _scan_state["cancelled"])
+                if not ok:
+                    _scan_state["status"] = qr_state.get("status", "timeout")
+                    _scan_state["result"] = {"error": "登录超时或取消"}
                     _scan_state["scanning"] = False
                     return
+                _scan_state["status"] = "logged_in"
 
                 # 登录成功 → 抓昵称 → 创建账号 → 保留 session
                 nickname = await uploader.scrape_nickname(page)
@@ -873,6 +881,19 @@ def api_scan_status():
         "qrcode": _scan_state["qrcode"],
         "result": _scan_state["result"],
     })
+
+# ===== 通用 QR 登录 API（添加账号 + 上传登录共用）=====
+
+@app.route("/api/qr-login/status", methods=["GET"])
+def api_qr_login_status():
+    """通用 QR 登录状态（上传/添加账号共用）"""
+    return jsonify(qr_state)
+
+@app.route("/api/qr-login/cancel", methods=["POST"])
+def api_qr_login_cancel():
+    """取消当前 QR 登录"""
+    qr_state["active"] = False
+    return jsonify({"ok": True})
 
 
 def _sanitize_nickname(nickname: str) -> str:

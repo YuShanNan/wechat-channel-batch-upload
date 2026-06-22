@@ -1011,6 +1011,17 @@ async function _pollAllAccounts() {
     }
     renderSidebar();
   } catch (e) { /* ignore */ }
+
+  // 检测 QR 登录弹窗（上传时自动弹出）
+  try {
+    const qrRes = await fetch('/api/qr-login/status');
+    const qrSt = await qrRes.json();
+    if (qrSt.active && !document.getElementById('qrcode-overlay').classList.contains('show')) {
+      openQrcodeModal();
+      pollQrcodeStatus();
+    }
+  } catch (e) { /* ignore */ }
+
   _allPollTimer = setTimeout(_pollAllAccounts, 3000);
 }
 startAllAccountsPolling();
@@ -1149,20 +1160,20 @@ const _qrcodeStatusMap = {
 };
 async function pollQrcodeStatus() {
   try {
-    const sr = await fetch('/api/accounts/add-with-scan/status');
+    const sr = await fetch('/api/qr-login/status');
     const st = await sr.json();
     const img = document.getElementById('qrcode-img');
     const spinner = document.getElementById('qrcode-spinner');
     const statusText = document.getElementById('qrcode-status-text');
     if (st.qrcode) { img.src = st.qrcode; img.style.display = ''; spinner.style.display = 'none'; }
     statusText.textContent = _qrcodeStatusMap[st.status] || st.status;
-    if (!st.scanning) {
+    if (!st.active) {
       spinner.style.display = 'none';
-      if (st.result && st.result.success) {
-        await loadAccounts();
+      if (st.status === 'logged_in') {
         setTimeout(closeQrcodeModal, 1500);
       } else {
-        statusText.textContent = st.result && st.result.error ? st.result.error : '未知错误';
+        statusText.textContent = st.status === 'timeout' ? '登录超时' :
+          st.status === 'cancelled' ? '已取消' : '登录结束';
         setTimeout(closeQrcodeModal, 3000);
       }
       return;
