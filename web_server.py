@@ -347,6 +347,10 @@ async def _run_account_upload(account_name: str, profile_dir: Path):
                     else:
                         state["status"] = "等待扫码登录..."
                         _add_log(account_name, "请扫码登录")
+                        # 立即标记 QR 活跃，前端弹出扫码窗
+                        qr_state["active"] = True
+                        qr_state["status"] = "loading"
+                        qr_state["qrcode"] = ""
                         logged_in = await _qr_login_and_wait(page, uploader, timeout_s=120,
                             cancel_fn=lambda: cancel_ev.is_set())
                 finally:
@@ -774,6 +778,11 @@ def api_add_account_with_scan():
     _scan_state["cancelled"] = False
     _scan_state["_page"] = None
     _scan_state["_uploader"] = None
+
+    # 立即标记 QR 活跃，前端开始等待（不等浏览器启动）
+    qr_state["active"] = True
+    qr_state["status"] = "loading"
+    qr_state["qrcode"] = ""
 
     def do_scan():
         async def _scan():
