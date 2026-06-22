@@ -181,7 +181,8 @@ def main():
             try:
                 web_server._graceful_shutdown(timeout=10)
             except Exception:
-                pass
+                import traceback
+                traceback.print_exc()
 
             icon.stop()
             try:
@@ -214,7 +215,8 @@ def main():
             try:
                 web_server._graceful_shutdown(timeout=10)
             except Exception:
-                pass
+                import traceback
+                traceback.print_exc()
             icon.stop()
             try:
                 window.destroy()

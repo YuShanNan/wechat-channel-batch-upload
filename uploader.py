@@ -475,8 +475,11 @@ class WeChatUploader:
             el = upload_text.first
             if not await el.is_visible():
                 return  # "上传封面"不可见，封面已自动生成，跳过
-            await el.click(force=True, timeout=3000)
-            await page.wait_for_timeout(500)
+            try:
+                await el.click(force=True, timeout=3000)
+                await page.wait_for_timeout(500)
+            except Exception:
+                return  # 点击失败（竞态/被遮挡），封面已自动生成，跳过
 
         # 找弹窗内的 file input 上传
         file_inputs = page.locator(SEL_FILE_INPUT)
@@ -578,8 +581,8 @@ class WeChatUploader:
         if not search_box:
             raise RuntimeError("未找到搜索框")
 
-        # 搜索短剧并选择结果（最多重试一次）
-        for retry in range(2):
+        # 搜索短剧并选择结果（最多重试两次）
+        for retry in range(3):
             if retry == 0:
                 # 首次：清空并逐字输入（fill 不触发 Vue 搜索事件）
                 await search_box.click()
@@ -590,9 +593,20 @@ class WeChatUploader:
                 await page.keyboard.type(drama_name, delay=120)
                 await page.wait_for_timeout(800)
                 await page.keyboard.press("Enter")
-            else:
-                # 重试：直接按 Enter 重新搜索（搜索框已有文本）
+            elif retry == 1:
+                # 第一次重试：直接按 Enter（搜索框大概率还有文本，更快）
                 await search_box.click()
+                await page.keyboard.press("Enter")
+                await page.wait_for_timeout(2000)
+            else:
+                # 第二次重试：完整重新输入（兜底，搜索框可能被清空了）
+                await search_box.click()
+                await page.wait_for_timeout(300)
+                await search_box.click(click_count=3)
+                await page.keyboard.press("Backspace")
+                await page.wait_for_timeout(200)
+                await page.keyboard.type(drama_name, delay=120)
+                await page.wait_for_timeout(800)
                 await page.keyboard.press("Enter")
                 await page.wait_for_timeout(2000)
 

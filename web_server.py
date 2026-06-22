@@ -195,7 +195,7 @@ def _graceful_shutdown(timeout=10):
     for name, state in states.items():
         if state.get("running"):
             cancel_ev = state.get("cancelled")
-            if cancel_ev and _event_loop and not _event_loop.is_closed():
+            if isinstance(cancel_ev, asyncio.Event) and _event_loop and not _event_loop.is_closed():
                 try:
                     asyncio.run_coroutine_threadsafe(_async_set_event(cancel_ev), _event_loop)
                 except Exception:
@@ -224,10 +224,10 @@ async def _check_session_active(profile_dir: Path) -> bool:
     try:
         await checker.start()
         page = await checker._context.new_page()
-        await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=20000)
         try:
+            await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=20000)
             await page.locator(SEL_ACCOUNT_INFO).first.wait_for(
-                state="attached", timeout=5000
+                state="attached", timeout=15000
             )
             return True  # 会话有效，可继续无头
         except Exception:
@@ -291,8 +291,16 @@ async def _run_account_upload(account_name: str, profile_dir: Path, headless: bo
                     await uploader.close()
                     state["running"] = False
                     return
+                duplicate = None
                 with _state_lock:
-                    _uploader_cache[account_name] = uploader
+                    # 避免 TOCTOU：另一个并发调用可能已抢先写入
+                    if account_name not in _uploader_cache:
+                        _uploader_cache[account_name] = uploader
+                    else:
+                        duplicate = uploader
+                        uploader = _uploader_cache[account_name]
+                if duplicate:
+                    await duplicate.close()
 
             # --- process queue ---
             queue = state["_video_queue"]
@@ -446,8 +454,7 @@ def api_check_accounts():
                 name = acct["name"]
                 # 跳过正在上传/使用中的账号，避免 profile 冲突
                 if _is_profile_busy(name):
-                    _check_state["results"][name] = True  # 不打扰，假设有效
-                    continue
+                    continue  # 不打扰也不标记，保持上次的检测结果
                 profile_dir = Path(acct["profile_dir"])
                 if not profile_dir.exists():
                     _check_state["results"][name] = False
