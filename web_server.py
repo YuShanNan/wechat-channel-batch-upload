@@ -81,6 +81,16 @@ def _add_log(account_name: str, msg: str):
     if len(state["logs"]) > _MAX_LOG_LINES:
         state["logs"] = state["logs"][-_MAX_LOG_LINES:]
 
+def _is_profile_busy(account_name: str) -> bool:
+    """检查该账号的 profile 是否已被浏览器占用（上传中 / 后台打开 / 缓存中）"""
+    with _state_lock:
+        state = _account_upload_state.get(account_name, {})
+        if state.get("running"):
+            return True
+        if account_name in _uploader_cache:
+            return True
+    return False
+
 
 def _compute_combined_progress(state: dict) -> int:
     """计算总进度：已完成视频数 + 当前视频子进度 → 整体百分比"""
@@ -174,9 +184,60 @@ def _cleanup_uploaders():
 
 atexit.register(_cleanup_uploaders)
 
+def _graceful_shutdown(timeout=10):
+    """优雅关闭：取消所有上传任务，等待完成，关闭浏览器（同步函数，可被 app.py 调用）"""
+    import time as _time
+
+    # 1. 取消所有运行中的上传
+    with _state_lock:
+        states = dict(_account_upload_state)
+
+    for name, state in states.items():
+        if state.get("running"):
+            cancel_ev = state.get("cancelled")
+            if cancel_ev and _event_loop and not _event_loop.is_closed():
+                try:
+                    asyncio.run_coroutine_threadsafe(_async_set_event(cancel_ev), _event_loop)
+                except Exception:
+                    pass
+
+    # 2. 等待上传任务结束（最多等 timeout 秒）
+    deadline = _time.time() + timeout
+    while _time.time() < deadline:
+        with _state_lock:
+            if not any(s.get("running") for s in _account_upload_state.values()):
+                break
+        _time.sleep(0.5)
+
+    # 3. 关闭所有浏览器并清理锁文件
+    _cleanup_uploaders()
+
 async def _async_set_event(ev: asyncio.Event):
     ev.set()
 
+
+async def _check_session_active(profile_dir: Path) -> bool:
+    """快速预检：用无头浏览器探测会话是否有效。
+    返回 True = 会话有效可无头上传，False = 需有头扫码登录。"""
+    from uploader import WeChatUploader, SEL_ACCOUNT_INFO
+    checker = WeChatUploader(profile_dir, headless=True)
+    try:
+        await checker.start()
+        page = await checker._context.new_page()
+        await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=20000)
+        try:
+            await page.locator(SEL_ACCOUNT_INFO).first.wait_for(
+                state="attached", timeout=5000
+            )
+            return True  # 会话有效，可继续无头
+        except Exception:
+            return False  # 需要重新扫码
+        finally:
+            await page.close()
+    except Exception:
+        return False  # 探测失败，走有头模式保底
+    finally:
+        await checker.close()
 
 async def _run_account_upload(account_name: str, profile_dir: Path, headless: bool):
     """Process the full video queue for one account, respecting cancel/skip/semaphore."""
@@ -204,14 +265,20 @@ async def _run_account_upload(account_name: str, profile_dir: Path, headless: bo
                 return
 
             # --- session reuse or creation ---
-            if account_name in _uploader_cache:
-                uploader = _uploader_cache[account_name]
-                if uploader._context is None:
-                    _uploader_cache.pop(account_name, None)
-                    uploader = None
+            with _state_lock:
+                if account_name in _uploader_cache:
+                    uploader = _uploader_cache[account_name]
+                    if uploader._context is None:
+                        _uploader_cache.pop(account_name, None)
+                        uploader = None
 
             if uploader is None:
-                uploader = WeChatUploader(profile_dir, headless=headless)
+                # 快速预检会话是否有效，决定是否需要可见浏览器扫码
+                _effective_headless = headless
+                if headless:
+                    _effective_headless = await _check_session_active(profile_dir)
+
+                uploader = WeChatUploader(profile_dir, headless=_effective_headless)
                 await uploader.start()
                 if cancel_ev.is_set():
                     await uploader.close()
@@ -224,7 +291,8 @@ async def _run_account_upload(account_name: str, profile_dir: Path, headless: bo
                     await uploader.close()
                     state["running"] = False
                     return
-                _uploader_cache[account_name] = uploader
+                with _state_lock:
+                    _uploader_cache[account_name] = uploader
 
             # --- process queue ---
             queue = state["_video_queue"]
@@ -309,13 +377,16 @@ async def _run_account_upload(account_name: str, profile_dir: Path, headless: bo
                     with _state_lock:
                         if account_name in _cooldown_timers:
                             del _cooldown_timers[account_name]
-                    cached = _uploader_cache.pop(account_name, None)
-                if cached:
-                    await cached.close()
-                    log.info(f"[cooldown] 已关闭 {account_name} 浏览器会话")
-            loop = asyncio.get_event_loop()
-            t = loop.create_task(_cooldown())
-            _cooldown_timers[account_name] = t
+                        cached = _uploader_cache.pop(account_name, None)
+                    if cached:
+                        try:
+                            await cached.close()
+                        except Exception:
+                            pass
+                        log.info(f"[cooldown] 已关闭 {account_name} 浏览器会话")
+                loop = asyncio.get_event_loop()
+                t = loop.create_task(_cooldown())
+                _cooldown_timers[account_name] = t
 
 @app.route("/")
 def index():
@@ -373,15 +444,17 @@ def api_check_accounts():
             global _check_state
             for acct in accounts_to_check:
                 name = acct["name"]
+                # 跳过正在上传/使用中的账号，避免 profile 冲突
+                if _is_profile_busy(name):
+                    _check_state["results"][name] = True  # 不打扰，假设有效
+                    continue
                 profile_dir = Path(acct["profile_dir"])
                 if not profile_dir.exists():
                     _check_state["results"][name] = False
+                    account_mgr.clear_last_login(name)
                     continue
                 try:
-                    uploader = WeChatUploader(profile_dir, headless=True)
-                    await uploader.start()
-                    valid = await uploader.ensure_login(timeout_seconds=30)
-                    await uploader.close()
+                    valid = await _check_session_active(profile_dir)
                     _check_state["results"][name] = valid
                 except Exception as e:
                     log.debug(f"非关键操作失败: {e}")
@@ -405,6 +478,9 @@ def api_open_dashboard(name):
     profile_dir = account_mgr.get_profile_dir(name)
     if not profile_dir:
         return jsonify({"error": f"账号 {name} 不存在"}), 404
+
+    if _is_profile_busy(name):
+        return jsonify({"error": f"账号 {name} 正在上传中，请等待完成后再打开后台"}), 409
 
 
     def do_open():
@@ -437,13 +513,16 @@ def api_login_account(name):
     if not profile_dir:
         return jsonify({"error": f"账号 {name} 不存在"}), 404
 
+    if _is_profile_busy(name):
+        return jsonify({"error": f"账号 {name} 正在上传中，请等待完成后再登录"}), 409
+
 
     def do_login():
         async def _login():
             uploader = WeChatUploader(profile_dir, headless=False)
             try:
                 await uploader.start()
-                success = await uploader.ensure_login(timeout_seconds=180)
+                success = await uploader.ensure_login(timeout_seconds=120)
                 if not success:
                     account_mgr.clear_last_login(name)
                     return
@@ -453,7 +532,7 @@ def api_login_account(name):
                     page = await uploader._context.new_page()
                     await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=30000)
                     try:
-                        await page.locator(SEL_ACCOUNT_INFO).wait_for(state="visible", timeout=15000)
+                        await page.locator(SEL_ACCOUNT_INFO).first.wait_for(state="visible", timeout=15000)
                         nickname = await uploader.scrape_nickname(page)
                         await page.close()
                         recorded = (acct.get("nickname") or "").strip()
@@ -564,7 +643,8 @@ def api_account_upload_cancel(name):
     if isinstance(skip_ev, asyncio.Event):
         asyncio.run_coroutine_threadsafe(_async_set_event(skip_ev), _event_loop)
 
-    uploader = _uploader_cache.pop(name, None)
+    with _state_lock:
+        uploader = _uploader_cache.pop(name, None)
     if uploader:
         _close_uploader_safe(uploader)
 

@@ -85,8 +85,20 @@ class WeChatUploader:
         )
         if not self.headless:
             kwargs["args"] = ["--window-position=100,100", "--window-size=1200,800"]
-        self._context = await launch_persistent_context_async(**kwargs)
-        return self
+
+        self._clean_profile_locks()  # 主动清理残留锁文件
+        last_error = None
+        for attempt in range(2):
+            try:
+                self._context = await launch_persistent_context_async(**kwargs)
+                return self
+            except Exception as e:
+                last_error = e
+                if attempt == 0:
+                    log.info(f"[启动] 浏览器启动失败，清理锁文件后重试: {e}")
+                    self._clean_profile_locks()
+                    await asyncio.sleep(1)
+        raise RuntimeError(f"浏览器启动失败（已重试）: {last_error}")
 
     def _reset_window_state(self):
         """删除上次窗口位置缓存，避免 --window-position 被覆盖"""
@@ -99,6 +111,17 @@ class WeChatUploader:
                 p.unlink()
         except Exception as e:
             log.debug(f"非关键操作失败: {e}")
+
+    def _clean_profile_locks(self):
+        """清理 Chrome profile 锁文件，解决 exitCode=21 浏览器无法启动的问题"""
+        for d in (self.profile_dir, self.profile_dir / "Default"):
+            if not d.exists():
+                continue
+            for p in d.glob("Singleton*"):
+                try:
+                    p.unlink()
+                except Exception as e:
+                    log.debug(f"非关键操作失败: {e}")
 
     async def close(self):
         if not self._context:
@@ -121,6 +144,8 @@ class WeChatUploader:
         self._context = None
         # 3. 兜底：系统级杀死该 profile 的 Chrome 进程
         self._kill_chrome_process()
+        # 4. 清理残留锁文件，避免下次启动 exitCode=21
+        self._clean_profile_locks()
 
     def _kill_chrome_process(self):
         """通过 PowerShell 找到并终止使用此 profile 的 Chrome 进程"""
@@ -144,7 +169,7 @@ class WeChatUploader:
 
         # 等待已登录标识出现，避免固定延时
         try:
-            await page.locator(SEL_ACCOUNT_INFO).wait_for(state="attached", timeout=15000)
+            await page.locator(SEL_ACCOUNT_INFO).first.wait_for(state="attached", timeout=15000)
             log.info("[登录] 已登录")
             await page.close()
             return True
@@ -391,12 +416,14 @@ class WeChatUploader:
             # 读取 WeChat 原生进度条
             try:
                 el = page.locator(SEL_PROGRESS_BG).first
-                style = await el.get_attribute("style") or ""
+                if await el.count() == 0:
+                    continue  # 进度条已消失，直接检查发表按钮
+                style = await el.get_attribute("style", timeout=5000) or ""
                 m = _WIDTH_RE.search(style)
                 if m:
                     self._upload_progress = float(m.group(1))
             except Exception as e:
-                log.debug(f"非关键操作失败: {e}")
+                log.debug(f"非关键操作失败: {e}")  # 获取失败立即跳过
             await page.wait_for_timeout(500)
         raise TimeoutError("视频上传超时，发表按钮仍为禁用状态")
 
@@ -445,12 +472,11 @@ class WeChatUploader:
         # 点击"上传封面"（可能不可见，如封面已自动生成）
         upload_text = page.get_by_text(SEL_UPLOAD_COVER)
         if await upload_text.count() > 0:
-            try:
-                await upload_text.first.click(timeout=3000)
-                await page.wait_for_timeout(500)
-            except Exception as e:
-                log.debug(f"非关键操作失败: {e}")
-                return  # "上传封面"不可见，封面已自动设置，跳过
+            el = upload_text.first
+            if not await el.is_visible():
+                return  # "上传封面"不可见，封面已自动生成，跳过
+            await el.click(force=True, timeout=3000)
+            await page.wait_for_timeout(500)
 
         # 找弹窗内的 file input 上传
         file_inputs = page.locator(SEL_FILE_INPUT)
@@ -552,31 +578,44 @@ class WeChatUploader:
         if not search_box:
             raise RuntimeError("未找到搜索框")
 
-        # 清空并逐字输入（fill 不触发 Vue 搜索事件）
-        await search_box.click()
-        await page.wait_for_timeout(300)
-        await search_box.click(click_count=3)  # 三击全选
-        await page.keyboard.press("Backspace")
-        await page.wait_for_timeout(200)
-        await page.keyboard.type(drama_name, delay=120)
-        await page.wait_for_timeout(800)
-        await page.keyboard.press("Enter")
-        # 等搜索请求完成 — 先等 loading 出现再等消失
-        try:
-            await page.locator(SEL_LOADING).wait_for(state="visible", timeout=3000)
-            await page.locator(SEL_LOADING).wait_for(state="hidden", timeout=10000)
-        except Exception:
-            pass
-        await page.wait_for_timeout(500)
-        # 选第一个结果
-        try:
-            first_row = page.locator(SEL_DRAMA_ROW).first
-            await first_row.wait_for(state="attached", timeout=5000)
-            await first_row.evaluate("el => el.click()")
+        # 搜索短剧并选择结果（最多重试一次）
+        for retry in range(2):
+            if retry == 0:
+                # 首次：清空并逐字输入（fill 不触发 Vue 搜索事件）
+                await search_box.click()
+                await page.wait_for_timeout(300)
+                await search_box.click(click_count=3)  # 三击全选
+                await page.keyboard.press("Backspace")
+                await page.wait_for_timeout(200)
+                await page.keyboard.type(drama_name, delay=120)
+                await page.wait_for_timeout(800)
+                await page.keyboard.press("Enter")
+            else:
+                # 重试：直接按 Enter 重新搜索（搜索框已有文本）
+                await search_box.click()
+                await page.keyboard.press("Enter")
+                await page.wait_for_timeout(2000)
+
+            # 等搜索请求完成 — 先等 loading 出现再等消失
+            try:
+                await page.locator(SEL_LOADING).first.wait_for(state="visible", timeout=3000)
+                await page.locator(SEL_LOADING).first.wait_for(state="hidden", timeout=10000)
+            except Exception:
+                pass
             await page.wait_for_timeout(500)
-            log.info(f"已选择短剧: {drama_name}")
-        except Exception:
-            raise RuntimeError(f"未找到短剧: {drama_name}")
+
+            # 选第一个结果
+            try:
+                first_row = page.locator(SEL_DRAMA_ROW).first
+                await first_row.wait_for(state="attached", timeout=15000)
+                await first_row.evaluate("el => el.click()")
+                await page.wait_for_timeout(500)
+                log.info(f"已选择短剧: {drama_name}")
+                return
+            except Exception:
+                continue
+
+        raise RuntimeError(f"未找到短剧: {drama_name}")
 
     async def _set_scheduled_time(self, page: Page, time_str: str):
         """设置定时发表时间"""

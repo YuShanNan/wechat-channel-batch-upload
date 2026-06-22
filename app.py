@@ -177,6 +177,12 @@ def main():
                 if result != 1:  # IDOK
                     return
 
+            # 优雅关闭：取消上传 → 等待完成 → 关闭浏览器 → 清理锁文件
+            try:
+                web_server._graceful_shutdown(timeout=10)
+            except Exception:
+                pass
+
             icon.stop()
             try:
                 window.destroy()
@@ -204,6 +210,11 @@ def main():
         # Expose window + tray exit to web_server
         # 前端已验证过上传状态，后端不再重复 HTTP 检查（避免 Flask 死锁）
         def _force_exit():
+            # 优雅关闭：取消上传 → 等待完成 → 关闭浏览器 → 清理锁文件
+            try:
+                web_server._graceful_shutdown(timeout=10)
+            except Exception:
+                pass
             icon.stop()
             try:
                 window.destroy()
