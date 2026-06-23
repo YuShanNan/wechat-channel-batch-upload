@@ -602,22 +602,29 @@ def api_login_account(name):
 
     def do_login():
         async def _login():
-            uploader = WeChatUploader(profile_dir, headless=False)
+            uploader = WeChatUploader(profile_dir, headless=True)
+            page = None
             try:
                 await uploader.start()
-                success = await uploader.ensure_login(timeout_seconds=120)
-                if not success:
-                    account_mgr.clear_last_login(name)
-                    return
+                page = await uploader._context.new_page()
+                await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=30000)
+
+                # 未登录 → 前端弹 QR 扫码
+                if await page.locator(SEL_ACCOUNT_INFO).count() == 0:
+                    qr_state["active"] = True
+                    qr_state["status"] = "loading"
+                    qr_state["qrcode"] = ""
+                    ok = await _qr_login_and_wait(page, uploader, timeout_s=120)
+                    if not ok:
+                        account_mgr.clear_last_login(name)
+                        return
+
                 # 校验重新登录的账号与已记录账号是否一致
                 acct = account_mgr.get_account(name)
                 if acct:
-                    page = await uploader._context.new_page()
-                    await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=30000)
                     try:
                         await page.locator(SEL_ACCOUNT_INFO).first.wait_for(state="visible", timeout=15000)
                         nickname = await uploader.scrape_nickname(page)
-                        await page.close()
                         recorded = (acct.get("nickname") or "").strip()
                         current = (nickname or "").strip()
                         if recorded and current and recorded != current:
@@ -626,11 +633,15 @@ def api_login_account(name):
                             return
                     except Exception as e:
                         log.warning(f"[登录] 昵称校验失败: {e}")
-                        await page.close() if page else None
                 account_mgr.update_last_login(name)
             except Exception as e:
                 log.error(f"登录失败 [{name}]: {e}", exc_info=True)
             finally:
+                if page:
+                    try:
+                        await page.close()
+                    except Exception:
+                        pass
                 await uploader.close()
         asyncio.run(_login())
 
