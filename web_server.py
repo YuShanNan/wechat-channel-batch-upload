@@ -342,9 +342,15 @@ async def _run_account_upload(account_name: str, profile_dir: Path):
                 page = await uploader._context.new_page()
                 try:
                     await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=30000)
-                    if await page.locator(SEL_ACCOUNT_INFO).count() > 0:
+                    # 等 SPA 渲染完成再检查（最多 8 秒）
+                    try:
+                        await page.locator(SEL_ACCOUNT_INFO).first.wait_for(
+                            state="attached", timeout=8000
+                        )
                         logged_in = True
-                    else:
+                    except Exception:
+                        logged_in = False
+                    if not logged_in:
                         state["status"] = "等待扫码登录..."
                         _add_log(account_name, "请扫码登录")
                         # 立即标记 QR 活跃，前端弹出扫码窗
@@ -624,6 +630,14 @@ def api_login_account(name):
                 await uploader.start()
                 page = await uploader._context.new_page()
                 await page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=30000)
+
+                # 等 SPA 渲染完成再判断是否需要扫码
+                try:
+                    await page.locator(SEL_ACCOUNT_INFO).first.wait_for(
+                        state="attached", timeout=8000
+                    )
+                except Exception:
+                    pass
 
                 # 未登录 → 前端弹 QR 扫码
                 if await page.locator(SEL_ACCOUNT_INFO).count() == 0:
