@@ -537,7 +537,23 @@ def api_check_accounts():
                     account_mgr.clear_last_login(name)
                     continue
                 try:
-                    valid = await _check_session_active(profile_dir)
+                    # 快速检测：无头浏览器 → 打开页面 → 看 .account-info 是否出现
+                    checker = WeChatUploader(profile_dir, headless=True)
+                    try:
+                        await checker.start()
+                        chk_page = await checker._context.new_page()
+                        try:
+                            await chk_page.goto(CREATE_URL, wait_until="domcontentloaded", timeout=20000)
+                            await chk_page.locator(SEL_ACCOUNT_INFO).first.wait_for(
+                                state="attached", timeout=15000
+                            )
+                            valid = True
+                        except Exception:
+                            valid = False
+                        finally:
+                            await chk_page.close()
+                    finally:
+                        await checker.close()
                     _check_state["results"][name] = valid
                 except Exception as e:
                     log.debug(f"非关键操作失败: {e}")
